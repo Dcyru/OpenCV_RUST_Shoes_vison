@@ -1,0 +1,3008 @@
+// ================================================================
+//  Shoe Stack Vision — main.rs  v14
+//  OpenCV + PCA spine + Delta Robot Vision
+//
+//  ── KIẾN TRÚC ETHERNET (PC SLAVE) ───────────────────────────────
+//  PC là Modbus TCP SLAVE thuần túy — PLC chủ động TẤT CẢ:
+//    FC03 — PLC đọc D register từ PC  (tọa độ robot từ vision)
+//    FC16 — PLC ghi D register lên PC  (robot status, phản hồi)
+//    FC05 — PLC ghi M coil lên PC      (I/O flags, relay)
+//    FC01 — PLC đọc M coil từ PC       (nếu cần)
+//
+//  ── CHUYỂN ĐỔI TỌA ĐỘ CAM → ROBOT ─────────────────────────────
+//  Cam pixel (cx,cy) → Robot mm (rx,ry):
+//    Tâm vùng làm việc robot chiếu lên ảnh: CAM_ORIGIN_PX (col,row)
+//    Bán kính vùng làm việc robot trên ảnh: CAM_ROBOT_RADIUS_PX
+//    Bán kính thực của robot trên mặt phẳng: ROBOT_RADIUS_MM
+//    scale = ROBOT_RADIUS_MM / CAM_ROBOT_RADIUS_PX
+//    rx = (cx - CAM_ORIGIN_PX.x) * scale
+//    ry = (cy - CAM_ORIGIN_PX.y) * scale   (y+ đi xuống ảnh = y+ robot)
+//  Điều chỉnh CAM_ORIGIN_PX và CAM_ROBOT_RADIUS_PX cho từng setup.
+//
+//  ── PHÍM ────────────────────────────────────────────────────────
+//    [D] xác nhận toàn frame làm vùng xử lý (ROI = full frame)
+//    [S] chụp ảnh mẫu chuẩn
+//    [R] load lại mẫu từ file
+//    [P] TCP on/off   [Q] thoát
+//
+//  GUI: python gui.py
+// ================================================================
+
+use opencv::{
+    core::{self, Mat, Point, Point2f, Rect, Scalar, Size, BORDER_DEFAULT},
+    highgui, imgcodecs, imgproc::{self, CHAIN_APPROX_SIMPLE, RETR_EXTERNAL},
+    prelude::*, videoio, Result,
+};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender};
+use std::time::{Duration, Instant};
+
+// ================================================================
+//  CẤU HÌNH BIND — PC SLAVE
+// ================================================================
+const BIND_ADDR:    &str = "0.0.0.0:502";   // port 502 cần Admin (Windows) — chỉ dùng port này, không fallback
+const UNIT_ID:      u8   = 1;
+
+// ── D register space ─────────────────────────────────────────────
+// PC giữ D_SIZE register (D0..D{D_SIZE-1})
+// D_LOT_START..+D_LOT_COUNT   : Vision data  (PC ghi, PLC đọc FC03)
+// D_ROBOT_START..+D_ROBOT_COUNT: Robot status (PLC ghi FC16, PC lưu)
+const D_SIZE:         usize = 256;
+const D_LOT_START:    u16   = 0;    // D0  — bắt đầu vùng tọa độ lót
+const D_LOT_COUNT:    u16   = 11;   // D0..D10
+const D_ROBOT_START:  u16   = 100;  // D100 — bắt đầu vùng robot status
+const D_ROBOT_COUNT:  u16   = 24;   // D100..D123, 6 giá trị, mỗi giá trị chiếm khối 4 word
+
+// ================================================================
+//  CHẾ ĐỘ ĐỌC GIÁ TRỊ ROBOT (pulse1/2/3, speed1/2/3)
+// ================================================================
+// PLC Xinje có thể gửi dữ liệu theo nhiều kiểu khác nhau tuỳ chương
+// trình ladder thực tế — chưa biết chắc PLC gửi 32-bit (DINT, dùng 2
+// word) hay 64-bit thật (LDINT/double, dùng đủ 4 word), và thứ tự
+// word có thể là LSB-trước hay MSB-trước.
+//
+// CÁCH DÙNG: đổi giá trị hằng số ROBOT_VALUE_MODE bên dưới thành 1
+// trong các mode đã định nghĩa, build lại, chạy thử với PLC thật.
+// Theo dõi log "[SLAVE] PLC FC.. D..." để so sánh số ra có khớp với
+// giá trị PLC đang hiển thị hay không, rồi chọn mode đúng.
+//
+//   MODE 1 = 32-bit số nguyên, D[addr]=LSB, D[addr+1]=MSB     (2 word đầu)
+//   MODE 2 = 32-bit số nguyên, D[addr]=MSB, D[addr+1]=LSB     (2 word đầu, đảo thứ tự)
+//   MODE 3 = 64-bit số nguyên thật, D[addr..addr+3] LSB→MSB   (đủ 4 word, word thấp trước)
+//   MODE 4 = 64-bit số nguyên thật, D[addr..addr+3] MSB→LSB   (đủ 4 word, word cao trước)
+//   MODE 5 = 64-bit SỐ THỰC (IEEE 754 double), D[addr..addr+3] LSB→MSB (đủ 4 word)
+//            → đã xác nhận thực tế PLC Xinje (lệnh QMOV, thanh ghi
+//            "Instruction position" D20016 v.v.) lưu vị trí trục dưới
+//            dạng LREAL/double, KHÔNG phải số nguyên. Ví dụ test thực
+//            tế: word thô ghép theo i64 = -4563569190572654592 (số rác
+//            khổng lồ vô nghĩa), nhưng ghép đúng theo f64 = -3449.0
+//            (số nhỏ, hợp lý cho 1 vị trí xung). MODE 5 lấy giá trị
+//            f64 này, LÀM TRÒN về số nguyên gần nhất rồi mới gửi lên
+//            GUI (vì hiển thị/log ở các nơi khác đều dùng i64).
+//
+// CHỈ BẬT 1 MODE TẠI 1 THỜI ĐIỂM — đổi số ở đây rồi build lại:
+const ROBOT_VALUE_MODE: u8 = 5;
+// ================================================================
+// ── M coil space ──────────────────────────────────────────────────
+// PC giữ M_SIZE coil (M0..M{M_SIZE-1})
+// PLC ghi M coil lên PC qua FC05
+const M_SIZE:        usize = 2101;
+const M_IO_START:    u16   = 100;   // M100 — bắt đầu vùng trạng thái PLC->PC
+const M_IO_COUNT:    u16   = 15;    // M100..M114
+const M_CONN_OK:     u16   = 2000;  // M2000 — trạng thái kết nối truyền thông OK
+const M_VISION_READY:u16   = 112;   // M112  — mini PC gửi kết quả vision có dX/dY
+const M_AXIS_DEVIATION:    u16 = 113; // M113 (PLC M2002) — PLC ghi: lệch trục X/Y ngoài vùng làm việc => NGỪNG ROBOT
+const M_WORKPIECE_DETECT:  u16 = 114; // M114 (PLC M2003) — PC ghi: phát hiện phôi=1, không có=0 (PLC lên lấy)
+
+// Tên hiển thị các M coil (tuỳ chỉnh)
+const M_IO_NAMES: &[&str] = &[
+    "AUTO", "MANUAL", "E_STOP", "S1_ANGLE_SENSOR",
+    "S2_ANGLE_SENSOR", "S3_ANGLE_SENSOR", "LIFT_UP", "LIFT_DOWN",
+    "WORK_DETECT", "CYCLE_3P", "HOME_DONE", "GRIP_DONE_NG",
+    "VISION_READY", "AXIS_DEVIATION_STOP", "WORKPIECE_DETECT_PC",
+];
+
+// Tên D register robot status
+// Xinje DINT (32-bit) = 2 word CDAB: D[n]=low, D[n+1]=high
+const D_ROBOT_NAMES: &[&str] = &[
+    "servo1_pulse_w0", "servo1_pulse_w1", "servo1_pulse_w2", "servo1_pulse_w3",   // D100-D103 (w0=lsb..w3=msb)
+    "servo2_pulse_w0", "servo2_pulse_w1", "servo2_pulse_w2", "servo2_pulse_w3",   // D104-D107
+    "servo3_pulse_w0", "servo3_pulse_w1", "servo3_pulse_w2", "servo3_pulse_w3",   // D108-D111
+    "servo1_speed_w0", "servo1_speed_w1", "servo1_speed_w2", "servo1_speed_w3",   // D112-D115
+    "servo2_speed_w0", "servo2_speed_w1", "servo2_speed_w2", "servo2_speed_w3",   // D116-D119
+    "servo3_speed_w0", "servo3_speed_w1", "servo3_speed_w2", "servo3_speed_w3",   // D120-D123
+];
+
+// ── IPC Server (gửi dữ liệu cho GUI) ─────────────────────────────
+const IPC_BIND: &str = "127.0.0.1:5556";
+
+// ── Camera ────────────────────────────────────────────────────────
+const CAM_ID:          i32  = 1;
+const WINDOW:          &str = "Shoe Stack Vision v13";
+// Bật/tắt cửa sổ debug OpenCV cục bộ. Từ khi gui.py điều khiển được
+// 100% qua IPC (phím S/D/R/P + xem camera trực tiếp trên GUI), cửa
+// sổ này không còn cần thiết nữa -> để false để không hiện lên.
+// Đổi lại true nếu cần debug hình ảnh trực tiếp tại máy chạy main.rs.
+const SHOW_WINDOW:     bool = false;
+const REFERENCE_FILE:  &str = "reference.png";
+const REF_MASK_FILE:   &str = "ref_mask.png";
+const ROI_FILE:        &str = "roi.txt";
+const CAPTURE_FRAMES:  i32  = 45;
+const DISPLAY_W:       i32  = 1280;
+const DISPLAY_H:       i32  = 720;
+const JPEG_QUALITY:    i32  = 72;
+
+// ================================================================
+//  CẤU HÌNH CHUYỂN ĐỔI TỌA ĐỘ CAM → ROBOT DELTA
+//  ── SỬA 3 GIÁ TRỊ NÀY CHO ĐÚNG VỚI SETUP THỰC TẾ ──────────────
+//
+//  Cách xác định CAM_ORIGIN_PX:
+//    Đặt một điểm đánh dấu vào đúng tâm vùng làm việc robot,
+//    chụp ảnh, đọc tọa độ pixel (col, row) của điểm đó.
+//
+//  Cách xác định CAM_ROBOT_RADIUS_PX:
+//    Đo (bằng pixel) bán kính vòng tròn vùng làm việc robot
+//    khi nhìn qua camera từ trên xuống.
+//    Ví dụ: nếu vùng làm việc đường kính ~800px thì radius = 400.
+//
+//  ROBOT_RADIUS_MM:
+//    Bán kính thực của vùng làm việc robot Delta (mm).
+//    Ví dụ robot Delta nhỏ: 150mm, robot lớn hơn: 300mm.
+// ================================================================
+const CAMERA_MODEL:           &str       = "Logitech C920";
+
+// ================================================================
+//  MỐC GỐC (0,0,0) — MÓC TRỌNG TÂM BỆ PHÔI CỐ ĐỊNH
+//  ── NHẬP 3 GIÁ TRỊ ĐO THỰC TẾ DƯỚI ĐÂY ───────────────────────────
+//
+//  CAMERA_ORIGIN_XYZ_MM: tọa độ (x, y, z) của TÂM ỐNG KÍNH camera,
+//    đo bằng thước/máy đo, lấy mốc (0,0,0) là móc trọng tâm bệ phôi.
+//      x: lệch trái(-)/phải(+) so với mốc
+//      y: lệch trước(-)/sau(+) so với mốc (theo quy ước robot)
+//      z: chiều cao camera so với mặt phẳng mốc (mốc z=0 là mặt bệ phôi)
+//
+//  CAMERA_TO_WORKPIECE_Z_MM: khoảng cách thẳng đứng từ tâm ống kính
+//    xuống MẶT PHẲNG PHÔI (mặt lót giày đặt trên bệ). Nếu mặt phẳng
+//    phôi thấp hơn mốc (0,0,0) một khoảng D (vì mặt để vật không
+//    cùng cao độ với mặt bệ cố định), thì:
+//      CAMERA_TO_WORKPIECE_Z_MM = CAMERA_ORIGIN_XYZ_MM.2 + D
+//    (cộng dồn 2 đoạn nối tiếp cùng hướng: camera->mốc, rồi mốc->vật)
+//    Đo bằng thước dây: đo riêng camera->mốc và mốc->mặt vật, rồi cộng.
+//
+//  ROI_REAL_WIDTH_MM / ROI_REAL_HEIGHT_MM: kích thước THẬT (mm) của
+//    vùng ROI hiện đang xử lý, đo trên mặt phẳng phôi (không phải
+//    kích thước pixel). Cách đo: đặt 2 điểm đánh dấu ở 2 cạnh ROI
+//    nhìn thấy trên ảnh, đo khoảng cách thật giữa chúng (mm).
+//    Nếu ROI vuông/đều, có thể dùng ROBOT_WORK_DIAMETER_MM cho cả 2.
+// ================================================================
+const CAMERA_ORIGIN_XYZ_MM:      (f32, f32, f32) = (40.0, 192.3, -275.0); // (x,y,z): X reset về giá trị đo tay gốc vì công thức cam_to_robot đã đổi hướng (đảo dấu X) — CẦN CALIBRATE LẠI X sau khi build, xem hướng dẫn ở cam_to_robot(). Y giữ giá trị đã hiệu chỉnh thực nghiệm trước đó (192.3) vì trục Y không đổi hướng.
+const CAMERA_TO_WORKPIECE_Z_MM:  f32              = 675.0;             // 275mm (camera->mốc bệ cố định) + 400mm (mốc->mặt để vật) — đã đo thật
+const ROI_REAL_WIDTH_MM:         f32              = 372.0;             // chiều dài thật của ROI trên mặt phôi (mm) — đã đo thật
+const ROI_REAL_HEIGHT_MM:        f32              = 242.0;             // chiều rộng thật của ROI trên mặt phôi (mm) — đã đo thật
+
+// ── Rào an toàn: giới hạn độ lệch x/y gửi cho PLC ──────────────────
+// Nếu |delta_x| hoặc |delta_y| (mm, so với mẫu chuẩn) vượt quá giá trị
+// này thì COI NHƯ DỮ LIỆU KHÔNG HỢP LỆ — không ghi vào D2..D5, tránh
+// PLC nhận toạ độ ngoài vùng làm việc thật của robot Delta gây lỗi/va chạm.
+const MAX_ROBOT_DEVIATION_MM: f32 = 30.0; // 30mm = 3cm
+
+// ── Biến cũ (giữ để tương thích, được tính lại từ các biến trên) ──
+const ROBOT_WORK_DIAMETER_MM: f32        = ROI_REAL_WIDTH_MM;          // dùng cho trục X; xem ROI_REAL_HEIGHT_MM cho trục Y
+const CAMERA_ROBOT_XY_MM:     (f32, f32) = (CAMERA_ORIGIN_XYZ_MM.0, CAMERA_ORIGIN_XYZ_MM.1); // tâm khung camera trong hệ tọa độ robot (X,Y)
+const CAMERA_HEIGHT_MM:       f32        = CAMERA_TO_WORKPIECE_Z_MM;   // khoảng cách camera C920 tới mặt phẳng vật
+const CAMERA_ROBOT_Z_MM:      f32        = CAMERA_HEIGHT_MM;
+const ROI_MIN_SIZE_PX:     i32        = 20;
+
+// ================================================================
+//  HẰNG SỐ XỬ LÝ ẢNH
+// ================================================================
+const MIN_SHOE_AREA:      f64 = 8_000.0;
+const ROI_MIN_MEAN_GRAY:  f32 = 12.0;  // độ sáng trung bình ROI tối thiểu để coi là có khả năng có vật thể (chặn Otsu giả trên nền đen)
+const MAX_SHOE_AREA:      f64 = 250_000.0;
+const FOREIGN_MIN_AREA:   f64 = 4_000.0;
+const FOREIGN_TOTAL_AREA: f64 = 8_000.0;
+
+const SMOOTH_ALPHA:          f32 = 0.35;
+
+// Ngưỡng "deadband" cho góc trước khi GỬI đi (PLC + GUI): nếu góc mới
+// (đã qua EMA ở trên) chỉ lệch so với giá trị ĐÃ GỬI LẦN TRƯỚC < ngưỡng
+// này thì GIỮ NGUYÊN giá trị cũ, không gửi số nhiễu vặt (0.1-0.9°) đi.
+// Đây KHÔNG PHẢI là filter theo thời gian/buffer nên KHÔNG gây trễ:
+// ngay khi lệch thật sự > ngưỡng, giá trị cập nhật NGAY LẬP TỨC ở đúng
+// frame đó, không phải chờ thêm frame nào. Áp dụng cho cả góc lót đơn
+// (SpineSmooth) và góc lót TRÊN khi bị chồng (TopAngleSmooth).
+const ANGLE_DEADBAND_DEG:    f32 = 1.0;
+
+const FROZEN_CONFIRM_FRAMES:   i32 = 4;
+const NO_INSOLE_CONFIRM_FRAMES: i32 = 6;  // số frame liên tiếp không thấy lót để xác nhận HẾT LÓT
+                                           // (~6 frame ≈ 200ms @ 30fps) — tránh báo nhầm khi
+                                           // robot vừa rút tay, frame đầu tiên sau M111 còn tối.
+
+// ================================================================
+//  PHÁT HIỆN TAY GẮP — ĐỒNG BỘ VỚI PLC QUA M111
+//  PLC ghi M111 = 1 khi tay gắp đang di chuyển vào vùng camera,
+//  PC đọc M111 và skip toàn bộ xử lý ảnh frame đó ngay lập tức.
+//  PLC biết chính xác 100% vị trí robot nên không cần image-based
+//  detection (spine jump / dark pixel ratio) nữa — đơn giản và tin
+//  cậy tuyệt đối, không có false positive / false negative.
+// ================================================================
+// M111 — PLC ghi 1 khi tay gắp đang trong vùng camera (PLC → PC)
+//         PLC xóa về 0 khi robot đã ra khỏi vùng camera hoàn toàn.
+const M_ROBOT_IN_CAM: u16 = 111;
+
+const ROBOT_WORD_SYNC_MS: u64 = 500; // các word của 1 giá trị robot (2 word nếu mode 1/2, 4 word nếu mode 3/4)
+                                     // phải được ghi cách nhau <= 500ms mới tin tưởng ghép. Nếu PLC ghi cả khối
+                                     // qua FC16 (1 lần TCP), timestamp các word giống hệt nhau → luôn sync ok.
+
+const STACKED_SOLIDITY:       f32 = 0.84;   // (không còn dùng làm ngưỡng tuyệt đối, giữ lại tham chiếu)
+const STACKED_SOLIDITY_DROP:  f32 = 0.06;   // solidity tụt bao nhiêu so với mẫu mới coi là nghi méo do chồng lót (tương đối, không phải ngưỡng cố định)
+const STACKED_AREA_FACTOR:    f64 = 1.4;
+const STACKED_AREA_RATIO_MIN: f32 = 1.10;
+const OUTSIDE_RATIO_STACKED:  f32 = 0.12;
+
+const STACK_OFFSET_CONFIRM_PX: f32 = 12.0;  // trước: 4.0 — quá nhạy, rung ảnh/nhiễu segmentation bình thường cũng vượt ngưỡng
+const STACK_ROTATION_CONFIRM:  f32 = 6.0;   // trước: 2.0 — cùng lý do, 2° nằm trong sai số PCA bình thường
+
+const STACKED_CONFIRM_FRAMES: i32 = 5;  // số frame liên tiếp phải xác nhận "stacked" mới báo thật,
+                                         // tránh nhấp nháy 2-PHỨC do 1 frame lỗi đơn lẻ
+
+const TIP_SLICE_RATIO: f32 = 0.15;
+const ANGLE_THRESHOLD_DEG: f32 = 5.0;
+const POS_THRESHOLD_PX:    f32 = 15.0;
+
+const DAMAGE_AREA_RATIO_MIN: f32 = 0.80;
+const DAMAGE_AREA_RATIO_MAX: f32 = 1.20;
+const DAMAGE_SOLIDITY_MIN:   f32 = 0.85;
+
+const RESIDUAL_MIN_AREA: f64 = 5_000.0;  // trước: 1_500.0 — quá nhỏ, bóng/viền sáng-tối lệch nhẹ cũng đủ kích hoạt phân tích stacked
+
+const REG_DOWNSAMPLE:       i32 = 2;
+#[allow(dead_code)] // không còn dùng trực tiếp (quét thô toàn cục cũ đã thay bằng hill-climb đa điểm xuất phát), giữ lại để dễ khôi phục fallback
+const REG_SEED_RANGE_PX:    f32 = 60.0;
+const REG_INIT_STEP_PX:     f32 = 10.0;
+#[allow(dead_code)]
+const REG_SEARCH_RANGE_DEG: f32 = 185.0;
+const REG_INIT_STEP_DEG:    f32 = 6.0;
+const REG_FINE_STEP_PX:     f32 = 1.0;
+const REG_FINE_STEP_DEG:    f32 = 0.25;
+const REG_HILL_ITERS:       i32 = 50;
+const REG_MIN_IOU:          f32 = 0.65;  // trước: 0.42 — quá thấp, cho phép fit khớp có 42% là đủ "valid" -> vẽ H2/T2 sai vị trí
+
+const FLIP_ANGLE_DEG: f32 = 150.0;
+
+const STACK_SINGLE:  u16 = 0;
+const STACK_ALIGNED: u16 = 1;
+const STACK_OFFSET:  u16 = 2;
+const STACK_ROTATED: u16 = 3;
+const STACK_COMPLEX: u16 = 4;
+
+// ================================================================
+//  STRUCTS
+// ================================================================
+
+// ── Warm-start cho registration lót TRÊN (analyze_stacked_v9) ─────
+// Lưu lại (dx,dy,da) khớp tốt nhất của frame TRƯỚC. Khi lót trên gần
+// như đứng yên giữa các frame (trường hợp bình thường — robot đang
+// đứng yên chờ), ta có thể BỎ QUA bước quét thô toàn cục (±60px x
+// ±185° = hơn 10.000 phép warp mỗi frame, rất tốn) và chỉ tinh chỉnh
+// nhỏ quanh vị trí cũ. Đây chính là nguyên nhân chính khiến case chồng
+// lót "quét" lâu — không phải do EMA/deadband (những cái đó không gây
+// trễ theo thời gian, chỉ theo số lượng frame). Nếu mất dấu (fit không
+// hợp lệ) thì reset về quét thô như cũ ở frame kế tiếp.
+#[derive(Debug, Clone, Copy, Default)]
+struct RegSeedState {
+    active: bool,
+    dx:     f32,
+    dy:     f32,
+    da:     f32,
+}
+impl RegSeedState {
+    fn reset(&mut self) { *self = Self::default(); }
+}
+
+#[derive(Debug, Clone, Default, Copy)]
+struct InsoleSpine {
+    center:    Point2f,
+    tip:       Point2f,
+    heel:      Point2f,
+    spine_vec: Point2f,
+    angle360:  f32,
+    length_px: f32,
+}
+
+#[derive(Debug, Clone, Default)]
+struct StackedAnalysis {
+    top_spine:       InsoleSpine,
+    top_angle360:    f32,
+    top_angle_delta: f32,
+    top_delta_x:     f32,
+    top_delta_y:     f32,
+    top_offset_px:   f32,
+    fit_iou:         f32,
+    residual_area:   f64,
+    valid:           bool,
+    top_flipped:     bool,
+    stack_state:     u16,
+}
+
+// ── Lọc góc cho lót TRÊN (khi bị chồng lót) — cùng cơ chế với SpineSmooth:
+// EMA nội bộ (angle360/angle_delta) + deadband ANGLE_DEADBAND_DEG khi xuất
+// ra (out_angle360/out_angle_delta). Reset về mặc định mỗi khi top không
+// còn valid, để lần valid tiếp theo (có thể là lót khác) bắt kịp ngay,
+// không bị "ì" theo giá trị cũ.
+#[derive(Debug, Clone, Default)]
+struct TopAngleSmooth {
+    active:          bool,
+    angle360:        f32,
+    angle_delta:     f32,
+    out_angle360:    f32,
+    out_angle_delta: f32,
+    out_active:      bool,
+}
+
+impl TopAngleSmooth {
+    fn update(&mut self, raw_angle360: f32, raw_angle_delta: f32) {
+        if !self.active {
+            self.angle360    = raw_angle360;
+            self.angle_delta = raw_angle_delta;
+            self.active      = true;
+        } else {
+            let a = SMOOTH_ALPHA;
+            self.angle360    = smooth_angle360(self.angle360, raw_angle360, a);
+            self.angle_delta = self.angle_delta * (1.0 - a) + raw_angle_delta * a;
+        }
+        if !self.out_active {
+            self.out_angle360    = self.angle360;
+            self.out_angle_delta = self.angle_delta;
+            self.out_active      = true;
+        } else {
+            if delta_angle_signed(self.out_angle360, self.angle360).abs() > ANGLE_DEADBAND_DEG {
+                self.out_angle360 = self.angle360;
+            }
+            if (self.angle_delta - self.out_angle_delta).abs() > ANGLE_DEADBAND_DEG {
+                self.out_angle_delta = self.angle_delta;
+            }
+        }
+    }
+    fn reset(&mut self) { *self = Self::default(); }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ShoeSpine {
+    bottom_spine:  InsoleSpine,
+    stacked_info:  Option<StackedAnalysis>,
+    area:          f64,
+    solidity:      f32,
+    stacked:       bool,
+    delta_angle:   f32,
+    delta_cx:      f32,
+    delta_cy:      f32,
+    flipped:       bool,
+    damage_flags:  u8,
+    outside_ratio: f32,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RefSpine {
+    angle360:  f32,
+    center:    Point2f,
+    tip:       Point2f,
+    heel:      Point2f,
+    length_px: f32,
+    area:      f64,
+    spine_vec: Point2f,
+    solidity:  f32,   // solidity của mẫu chuẩn — dùng để so sánh tương đối, không dùng ngưỡng cố định
+}
+
+#[derive(Debug, Clone, Default)]
+struct SpineSmooth {
+    active:       bool,
+    center:       Point2f,
+    tip:          Point2f,
+    heel:         Point2f,
+    angle360:     f32,       // EMA nội bộ liên tục (KHÔNG dùng để gửi trực tiếp)
+    delta_angle:  f32,       // EMA nội bộ liên tục (KHÔNG dùng để gửi trực tiếp)
+    delta_cx:     f32,
+    delta_cy:     f32,
+    length_px:    f32,
+    last_flipped: bool,
+    // ── Giá trị GỬI RA (PLC + GUI), đã lọc qua deadband ANGLE_DEADBAND_DEG ──
+    // Đây là giá trị mà bên ngoài (build_slave_regs, VisionFrame) phải dùng,
+    // KHÔNG dùng angle360/delta_angle ở trên trực tiếp.
+    out_angle360:    f32,
+    out_delta_angle: f32,
+    out_active:      bool,
+}
+
+impl SpineSmooth {
+    fn update(&mut self, s: &ShoeSpine) {
+        let b = &s.bottom_spine;
+        if !self.active {
+            self.center       = b.center;
+            self.tip          = b.tip;
+            self.heel         = b.heel;
+            self.angle360     = b.angle360;
+            self.delta_angle  = s.delta_angle;
+            self.delta_cx     = s.delta_cx;
+            self.delta_cy     = s.delta_cy;
+            self.length_px    = b.length_px;
+            self.last_flipped = s.flipped;
+            self.active       = true;
+            self.out_angle360    = self.angle360;
+            self.out_delta_angle = self.delta_angle;
+            self.out_active      = true;
+            return;
+        }
+        let a = SMOOTH_ALPHA;
+        let k = 1.0 - a;
+        self.center   = lerp2f(self.center, b.center, a);
+        self.tip      = lerp2f(self.tip,    b.tip,    a);
+        self.heel     = lerp2f(self.heel,   b.heel,   a);
+        self.angle360 = smooth_angle360(self.angle360, b.angle360, a);
+        let mut snapped_delta = false;
+        if s.flipped != self.last_flipped {
+            self.delta_angle  = s.delta_angle;
+            self.last_flipped = s.flipped;
+            snapped_delta     = true; // lật thật sự — cho phép out_ nhảy ngay, bỏ qua deadband
+        } else {
+            self.delta_angle = self.delta_angle * k + s.delta_angle * a;
+        }
+        self.delta_cx  = self.delta_cx  * k + s.delta_cx  * a;
+        self.delta_cy  = self.delta_cy  * k + s.delta_cy  * a;
+        self.length_px = self.length_px * k + b.length_px * a;
+
+        // ── Deadband: chỉ cập nhật giá trị GỬI RA khi lệch thật > ngưỡng ──
+        if !self.out_active {
+            self.out_angle360    = self.angle360;
+            self.out_delta_angle = self.delta_angle;
+            self.out_active      = true;
+        } else {
+            if delta_angle_signed(self.out_angle360, self.angle360).abs() > ANGLE_DEADBAND_DEG {
+                self.out_angle360 = self.angle360;
+            }
+            if snapped_delta || (self.delta_angle - self.out_delta_angle).abs() > ANGLE_DEADBAND_DEG {
+                self.out_delta_angle = self.delta_angle;
+            }
+        }
+    }
+    fn reset(&mut self) { *self = Self::default(); }
+}
+
+fn lerp2f(a: Point2f, b: Point2f, t: f32) -> Point2f {
+    Point2f::new(a.x*(1.0-t) + b.x*t, a.y*(1.0-t) + b.y*t)
+}
+
+fn angle360_from_center_tip(center: Point2f, tip: Point2f) -> f32 {
+    let dx = tip.x - center.x;
+    let dy = tip.y - center.y;
+    let mut a = dy.atan2(dx).to_degrees();
+    if a < 0.0 { a += 360.0; }
+    a
+}
+
+fn norm360(a: f32) -> f32 {
+    let mut r = a % 360.0;
+    if r < 0.0 { r += 360.0; }
+    r
+}
+
+fn delta_angle_signed(from: f32, to: f32) -> f32 {
+    let mut d = norm360(to) - norm360(from);
+    if d >  180.0 { d -= 360.0; }
+    if d < -180.0 { d += 360.0; }
+    d
+}
+
+fn smooth_angle360(prev: f32, next: f32, alpha: f32) -> f32 {
+    let d = delta_angle_signed(prev, next);
+    norm360(prev + d * alpha)
+}
+
+// RoiDraw đã bỏ — ROI luôn là toàn frame, không cần click chuột
+
+#[derive(Default)]
+struct Stabilizer {
+    frozen_count:     i32,
+    confirmed_frozen: bool,
+    no_insole_count:     i32,   // đếm frame liên tiếp không thấy lót (debounce hết lót)
+    confirmed_no_insole: bool,  // true sau NO_INSOLE_CONFIRM_FRAMES frame liên tiếp trống
+    stacked_count:       i32,   // đếm frame liên tiếp nghi ngờ stacked (debounce 2-PHỨC)
+    confirmed_stacked:   bool,  // true sau STACKED_CONFIRM_FRAMES frame liên tiếp nghi stacked
+    // robot_intrusion_count và confirmed_robot_intrusion đã bỏ:
+    // dùng M111 (M_ROBOT_IN_CAM) từ PLC thay thế — tin cậy hơn image-based detection.
+}
+
+enum AppState {
+    NoReference,
+    Capturing { count: i32, acc: Mat },
+    Tracking  { _reference: Mat, ref_spine: RefSpine, ref_mask: Mat },
+}
+
+// ================================================================
+//  CHUYỂN ĐỔI TỌA ĐỘ: CAM PIXEL → ROBOT MM
+// ================================================================
+//
+//  Mô hình hình học:
+//    - Camera nhìn từ trên xuống, trục Y ảnh đi xuống.
+//    - Tâm workspace robot trên ảnh: CAM_ORIGIN_PX (ox, oy).
+//    - Scale: scale_mm_per_px = ROBOT_RADIUS_MM / CAM_ROBOT_RADIUS_PX
+//    - rx = (px_col - ox) * scale    [mm, dương = phải]
+//    - ry = (px_row - oy) * scale    [mm, dương = xuống / phía trước robot]
+//
+//  Hệ tọa độ robot Delta thường dùng:
+//    X+  = phải (nhìn từ trên)
+//    Y+  = phía trước / xuống ảnh  (tuỳ convention của PLC — có thể đảo dấu)
+//    Z   = chiều cao (không dùng ở đây)
+//
+//  Nếu robot của bạn dùng convention ngược (Y+ đi lên ảnh), đổi dấu ry.
+//
+//  Returns: (robot_x_mm, robot_y_mm)
+// ================================================================
+//  CAM → ROBOT: quy đổi pixel trong ROI sang tọa độ tuyệt đối (mm)
+//  theo mốc (0,0,0) là móc trọng tâm bệ phôi cố định.
+//
+//  Công thức:
+//    rx = CAMERA_ORIGIN_XYZ_MM.x − (pixel_x - tâm_ROI_x) * scale_x   [ĐẢO DẤU X]
+//    ry = CAMERA_ORIGIN_XYZ_MM.y + (pixel_y - tâm_ROI_y) * scale_y
+//  với scale_x = ROI_REAL_WIDTH_MM / roi.width (mm/pixel theo trục X)
+//       scale_y = ROI_REAL_HEIGHT_MM / roi.height (mm/pixel theo trục Y)
+//
+//  LƯU Ý HƯỚNG TRỤC (đã xác nhận thực nghiệm trên camera C920 lắp thật):
+//  pixel dịch sang PHẢI trong ảnh → tọa độ X robot GIẢM (trục X robot
+//  hướng ngược chiều pixel ngang). Pixel dịch XUỐNG trong ảnh → tọa độ
+//  Y robot TĂNG (cùng chiều pixel dọc, không đảo). Nếu đổi hướng lắp
+//  camera, kiểm tra lại dấu này bằng thực nghiệm trước khi build.
+//
+//  Nghĩa là: tọa độ tuyệt đối lót = tọa độ camera (đã đo thật) +
+//  độ lệch (mm) giữa lót và tâm khung hình camera (đã áp dấu đúng trục).
+//
+//  LƯU Ý: công thức này giả định camera nhìn vuông góc thẳng xuống
+//  mặt phẳng phôi, mặt phẳng phôi luôn ở cùng độ cao
+//  (CAMERA_TO_WORKPIECE_Z_MM không đổi), và ảnh đã hết méo ống kính.
+//  Nếu phôi dày khác nhau hoặc ống kính chưa undistort, sẽ có sai số
+//  tăng dần ở các vị trí xa tâm ROI.
+// ================================================================
+fn cam_to_robot(px_col: f32, px_row: f32, roi: Rect) -> (f32, f32) {
+    let scale_x = ROI_REAL_WIDTH_MM / roi.width.max(1) as f32;
+    let scale_y = ROI_REAL_HEIGHT_MM / roi.height.max(1) as f32;
+    let local_x = px_col - roi.x as f32;
+    let local_y = px_row - roi.y as f32;
+    let rx = CAMERA_ORIGIN_XYZ_MM.0 - (local_x - roi.width as f32 * 0.5) * scale_x; // X đảo dấu
+    let ry = CAMERA_ORIGIN_XYZ_MM.1 + (local_y - roi.height as f32 * 0.5) * scale_y;
+    (rx, ry)
+}
+
+fn cam_delta_to_robot(delta_col: f32, delta_row: f32, roi: Rect) -> (f32, f32) {
+    let scale_x = ROI_REAL_WIDTH_MM / roi.width.max(1) as f32;
+    let scale_y = ROI_REAL_HEIGHT_MM / roi.height.max(1) as f32;
+    (-delta_col * scale_x, delta_row * scale_y) // delta_x đảo dấu để khớp hướng trục X robot
+}
+
+fn robot_debug_for_point(px_col: f32, px_row: f32, roi: Rect) -> (f32, f32, f32, bool) {
+    let (rx, ry) = cam_to_robot(px_col, px_row, roi);
+    let dx = rx - CAMERA_ORIGIN_XYZ_MM.0;
+    let dy = ry - CAMERA_ORIGIN_XYZ_MM.1;
+    let dist_from_camera_center = (dx * dx + dy * dy).sqrt();
+    let in_frame = px_col >= roi.x as f32
+        && px_col <= (roi.x + roi.width) as f32
+        && px_row >= roi.y as f32
+        && px_row <= (roi.y + roi.height) as f32;
+    (rx, ry, dist_from_camera_center, in_frame)
+}
+
+// ================================================================
+//  BUILD SLAVE REGS — tính 11 D register gửi cho PLC
+//  D0  = delta_angle × 10  (i16w)
+//  D1  = direction flag (0/1)
+//  D2  = delta_x × 10  (i16w, mm)   — lệch x của lót TRÊN (nếu stacked) hoặc lót đơn so với mẫu
+//  D3  = delta_y × 10  (i16w, mm)   — lệch y của lót TRÊN (nếu stacked) hoặc lót đơn so với mẫu
+//  D4  = giống D2 (gửi trùng cố ý, không phải tọa độ tuyệt đối nữa)
+//  D5  = giống D3 (gửi trùng cố ý, không phải tọa độ tuyệt đối nữa)
+//  D6  = flags
+//  D7  = offset_mm × 10 (khoảng cách từ tâm, mm)
+//  D8  = angle360 × 10
+//  D9  = stack_state
+//  D10 = data_ok (1=ok)
+//
+//  ── RÀO AN TOÀN (MAX_ROBOT_DEVIATION_MM) ──────────────────────────
+//  Nếu |delta_x| hoặc |delta_y| (mm, D2/D3 trước khi nhân 10) vượt quá
+//  MAX_ROBOT_DEVIATION_MM (30mm) thì coi như dữ liệu ngoài vùng làm
+//  việc thật của robot Delta -> KHÔNG ghi D2..D5 (trả về 0), đồng thời
+//  D10 = 0 (data_ok=false) để PLC không lấy tọa độ này ra chạy robot.
+// ================================================================
+fn build_slave_regs(smooth: &SpineSmooth, spine: &ShoeSpine, flags: u8, roi: Rect) -> [u16; 11] {
+    let to_u16  = |v: f32| -> u16 { (v * 10.0).round().clamp(0.0, 65535.0) as u16 };
+    let to_i16w = |v: f32| -> u16 {
+        ((v * 10.0).round().clamp(-32768.0, 32767.0) as i16) as u16
+    };
+
+    let any_flipped = spine.flipped
+        || spine.stacked_info.as_ref().map(|s| s.top_flipped).unwrap_or(false);
+
+    match &spine.stacked_info {
+        Some(si) if si.valid => {
+            // Tọa độ tâm lót trên (top) → robot mm
+            let (rx, ry) = cam_to_robot(si.top_spine.center.x, si.top_spine.center.y, roi);
+            let offset_mm = (rx * rx + ry * ry).sqrt();
+            // delta tâm top so với tâm tham chiếu → robot mm
+            let (rdx, rdy) = cam_delta_to_robot(si.top_delta_x, si.top_delta_y, roi);
+            let r40001: u16 = to_i16w(si.top_angle_delta);
+            let r40002: u16 = if si.top_flipped {
+                to_i16w(si.top_angle_delta)
+            } else if si.top_angle_delta.abs() < ANGLE_THRESHOLD_DEG { 0 }
+              else if si.top_angle_delta < 0.0 { 1 }
+              else { 0 };
+            let out_of_range = rdx.abs() > MAX_ROBOT_DEVIATION_MM || rdy.abs() > MAX_ROBOT_DEVIATION_MM;
+            let (r40003, r40004, r40005, r40006): (u16, u16, u16, u16) = if out_of_range {
+                println!("[SAFETY] Lệch top vượt {}mm (dx={:.1} dy={:.1}) -> không ghi D2..D5, D10=0",
+                    MAX_ROBOT_DEVIATION_MM, rdx, rdy);
+                (0, 0, 0, 0)
+            } else {
+                let d2 = to_i16w(rdx);   // D2 = delta_x mm (so với mẫu)
+                let d3 = to_i16w(rdy);   // D3 = delta_y mm (so với mẫu)
+                (d2, d3, d2, d3)         // D4 = giống D2, D5 = giống D3 (theo yêu cầu, không phải tuyệt đối nữa)
+            };
+            let r40007: u16 = flags as u16;
+            let r40008: u16 = to_u16(offset_mm);
+            let r40009: u16 = (si.top_angle360 * 10.0).round().clamp(0.0, 3600.0) as u16;
+            let r40010: u16 = si.stack_state;
+            let r40011: u16 = if out_of_range { 0 } else if (flags >> 5) & 1 == 0 { 1 } else { 0 };
+            [r40001, r40002, r40003, r40004, r40005,
+             r40006, r40007, r40008, r40009, r40010, r40011]
+        }
+        Some(si) => {
+            let r40007: u16 = flags as u16;
+            let r40010: u16 = si.stack_state;
+            let r40011: u16 = if (flags >> 5) & 1 == 0 { 1 } else { 0 };
+            [0, 0, 0, 0, 0, 0, r40007, 0, 0, r40010, r40011]
+        }
+        None => {
+            // Tọa độ tâm lót đơn → robot mm
+            let (rx, ry) = cam_to_robot(smooth.center.x, smooth.center.y, roi);
+            let offset_mm = (rx * rx + ry * ry).sqrt();
+            // delta tâm so với ref → robot mm (chuyển delta pixel → delta mm)
+            let (rdx, rdy) = cam_delta_to_robot(smooth.delta_cx, smooth.delta_cy, roi);
+            // Dùng out_delta_angle / out_angle360 (đã lọc deadband) — KHÔNG dùng
+            // delta_angle/angle360 thô, để tránh gửi số nhiễu vặt < 1° cho PLC.
+            let r40001: u16 = to_i16w(smooth.out_delta_angle);
+            let r40002: u16 = if any_flipped {
+                to_i16w(smooth.out_delta_angle)
+            } else if smooth.out_delta_angle.abs() < ANGLE_THRESHOLD_DEG { 0 }
+              else if smooth.out_delta_angle < 0.0 { 1 }
+              else { 0 };
+            let out_of_range = rdx.abs() > MAX_ROBOT_DEVIATION_MM || rdy.abs() > MAX_ROBOT_DEVIATION_MM;
+            let (r40003, r40004, r40005, r40006): (u16, u16, u16, u16) = if out_of_range {
+                println!("[SAFETY] Lệch lót đơn vượt {}mm (dx={:.1} dy={:.1}) -> không ghi D2..D5, D10=0",
+                    MAX_ROBOT_DEVIATION_MM, rdx, rdy);
+                (0, 0, 0, 0)
+            } else {
+                let d2 = to_i16w(rdx);    // D2 = delta_x mm (so với mẫu)
+                let d3 = to_i16w(rdy);    // D3 = delta_y mm (so với mẫu)
+                (d2, d3, d2, d3)          // D4 = giống D2, D5 = giống D3 (theo yêu cầu, không phải tuyệt đối nữa)
+            };
+            let r40007: u16 = flags as u16;
+            let r40008: u16 = to_u16(offset_mm);
+            let r40009: u16 = (smooth.out_angle360 * 10.0).round().clamp(0.0, 3600.0) as u16;
+            let r40010: u16 = STACK_SINGLE;
+            let r40011: u16 = if out_of_range { 0 } else if (flags >> 5) & 1 == 0 { 1 } else { 0 };
+            [r40001, r40002, r40003, r40004, r40005,
+             r40006, r40007, r40008, r40009, r40010, r40011]
+        }
+    }
+}
+
+// ================================================================
+//  SHARED STATE
+// ================================================================
+
+#[derive(Clone, Default)]
+pub struct VisionFrame {
+    pub angle360:    f32,
+    pub delta_angle: f32,
+    pub delta_cx:    f32,
+    pub delta_cy:    f32,
+    pub center_x:    f32,
+    pub center_y:    f32,
+    pub tip_x:       f32,
+    pub tip_y:       f32,
+    pub heel_x:      f32,
+    pub heel_y:      f32,
+    pub length_px:   f32,
+    pub area:        f64,
+    pub solidity:    f32,
+    pub stacked:     bool,
+    pub flipped:     bool,
+    pub frozen:      bool,
+    pub damage:      u8,
+    pub stack_state: u16,
+    pub data_ok:     bool,
+    pub flags:       u8,
+    pub top_valid:   bool,
+    pub top_angle:   f32,
+    pub top_delta_a: f32,
+    pub top_flipped: bool,
+    pub top_cx:      f32,
+    pub top_cy:      f32,
+    pub top_offset:  f32,
+    pub robot_x:     f32,
+    pub robot_y:     f32,
+    pub robot_r:     f32,
+    pub robot_in:    bool,
+    pub robot_dx:    f32,
+    pub robot_dy:    f32,
+    pub top_robot_x: f32,
+    pub top_robot_y: f32,
+    pub top_robot_r: f32,
+    pub frame_jpeg:  Vec<u8>,
+}
+
+pub struct AppShared {
+    pub vision:      Mutex<VisionFrame>,
+    pub slave_d:     Mutex<[u16;  200]>,   // D register (D0..D199)
+    pub slave_m:     Mutex<[bool;  M_SIZE]>, // M coil     (M0..M{M_SIZE-1}), đủ chỗ cho M_VISION_READY(112) và M_CONN_OK(2000)
+    pub tcp_clients: AtomicUsize,
+    pub ipc_clients: AtomicUsize,
+    pub tcp_enabled: AtomicBool,
+    // ── Chống race condition khi PLC ghi từng word riêng lẻ (FC06) ──
+    // d_write_ms: thời điểm (ms từ app_start) PLC ghi cuối mỗi D register.
+    // d_robot_cache: giá trị cuối được tin tưởng cho 6 mục robot
+    // (i64 để chứa được cả 32-bit lẫn 64-bit thật, tuỳ ROBOT_VALUE_MODE)
+    // (pulse1,pulse2,pulse3,speed1,speed2,speed3) — dùng khi 2 word chưa
+    // đồng bộ (timestamp lệch quá ngưỡng), tránh ghép word cũ+mới gây
+    // số "loạn" như hình anh gửi.
+    pub d_write_ms:     Mutex<[u64; 200]>,
+    pub d_robot_cache:  Mutex<[i64; 6]>,
+    pub app_start:      Instant,
+    // ── Lệnh điều khiển từ xa gửi từ GUI (gui.py) qua IPC :5556 ──────
+    // GUI gửi "CMD:s\n", "CMD:d\n", "CMD:r\n", "CMD:p\n" thay cho việc
+    // phải bấm phím trên cửa sổ OpenCV. Main loop đọc queue này mỗi
+    // vòng lặp giống hệt như đọc phím bàn phím cục bộ.
+    pub remote_cmd:     Mutex<std::collections::VecDeque<u8>>,
+}
+
+impl AppShared {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            vision:      Mutex::new(VisionFrame::default()),
+            slave_d:     Mutex::new([0u16; 200]),
+            slave_m:     Mutex::new([false; M_SIZE]),
+            tcp_clients: AtomicUsize::new(0),
+            ipc_clients: AtomicUsize::new(0),
+            tcp_enabled: AtomicBool::new(true),
+            d_write_ms:    Mutex::new([0u64; 200]),
+            d_robot_cache: Mutex::new([0i64; 6]),
+            app_start:     Instant::now(),
+            remote_cmd:    Mutex::new(std::collections::VecDeque::new()),
+        })
+    }
+}
+
+// ================================================================
+//  MODBUS TCP HELPERS
+// ================================================================
+
+fn resp_fc03(tid: u16, unit: u8, regs: &[u16]) -> Vec<u8> {
+    let bc  = (regs.len() * 2) as u8;
+    let len = (3 + regs.len() * 2) as u16;
+    let mut f = Vec::with_capacity(6 + len as usize);
+    f.extend_from_slice(&tid.to_be_bytes());
+    f.extend_from_slice(&0u16.to_be_bytes());
+    f.extend_from_slice(&len.to_be_bytes());
+    f.push(unit); f.push(0x03); f.push(bc);
+    for &r in regs { f.extend_from_slice(&r.to_be_bytes()); }
+    f
+}
+
+fn resp_fc01(tid: u16, unit: u8, bits: &[bool]) -> Vec<u8> {
+    let bc  = (bits.len() + 7) / 8;
+    let len = (3 + bc) as u16;
+    let mut f = Vec::with_capacity(6 + 3 + bc);
+    f.extend_from_slice(&tid.to_be_bytes());
+    f.extend_from_slice(&0u16.to_be_bytes());
+    f.extend_from_slice(&len.to_be_bytes());
+    f.push(unit); f.push(0x01); f.push(bc as u8);
+    for chunk in bits.chunks(8) {
+        let mut byte = 0u8;
+        for (i, &b) in chunk.iter().enumerate() { if b { byte |= 1 << i; } }
+        f.push(byte);
+    }
+    f
+}
+
+fn resp_fc16(tid: u16, unit: u8, addr: u16, count: u16) -> Vec<u8> {
+    let mut f = Vec::with_capacity(12);
+    f.extend_from_slice(&tid.to_be_bytes());
+    f.extend_from_slice(&0u16.to_be_bytes());
+    f.extend_from_slice(&6u16.to_be_bytes());
+    f.push(unit); f.push(0x10);
+    f.extend_from_slice(&addr.to_be_bytes());
+    f.extend_from_slice(&count.to_be_bytes());
+    f
+}
+
+fn resp_fc05(tid: u16, unit: u8, addr: u16, val: bool) -> Vec<u8> {
+    let coil = if val { 0xFF00u16 } else { 0x0000u16 };
+    let mut f = Vec::with_capacity(12);
+    f.extend_from_slice(&tid.to_be_bytes());
+    f.extend_from_slice(&0u16.to_be_bytes());
+    f.extend_from_slice(&6u16.to_be_bytes());
+    f.push(unit); f.push(0x05);
+    f.extend_from_slice(&addr.to_be_bytes());
+    f.extend_from_slice(&coil.to_be_bytes());
+    f
+}
+
+fn resp_fc06(tid: u16, unit: u8, addr: u16, val: u16) -> Vec<u8> {
+    let mut f = Vec::with_capacity(12);
+    f.extend_from_slice(&tid.to_be_bytes());
+    f.extend_from_slice(&0u16.to_be_bytes());
+    f.extend_from_slice(&6u16.to_be_bytes());
+    f.push(unit); f.push(0x06);
+    f.extend_from_slice(&addr.to_be_bytes());
+    f.extend_from_slice(&val.to_be_bytes());
+    f
+}
+
+fn resp_fc15(tid: u16, unit: u8, addr: u16, count: u16) -> Vec<u8> {
+    let mut f = Vec::with_capacity(12);
+    f.extend_from_slice(&tid.to_be_bytes());
+    f.extend_from_slice(&0u16.to_be_bytes());
+    f.extend_from_slice(&6u16.to_be_bytes());
+    f.push(unit); f.push(0x0F);
+    f.extend_from_slice(&addr.to_be_bytes());
+    f.extend_from_slice(&count.to_be_bytes());
+    f
+}
+
+fn resp_exception(tid: u16, unit: u8, fc: u8, code: u8) -> Vec<u8> {
+    let mut f = Vec::with_capacity(9);
+    f.extend_from_slice(&tid.to_be_bytes());
+    f.extend_from_slice(&0u16.to_be_bytes());
+    f.extend_from_slice(&3u16.to_be_bytes());
+    f.push(unit); f.push(0x80 | fc); f.push(code);
+    f
+}
+
+/// Đọc DINT 32-bit từ 2 D register liên tiếp theo chuẩn Xinje ABCD
+/// (high word tại addr, low word tại addr+1)
+/// Ví dụ: -9449 = 0xFFFFDB17 → D[addr]=0xFFFF(hi), D[addr+1]=0xDB17(lo)
+#[allow(dead_code)]
+fn d_words_to_i32(d: &[u16], addr: usize) -> i32 {
+    let hi = d[addr]     as u32;
+    let lo = d[addr + 1] as u32;
+    ((hi << 16) | lo) as i32
+}
+
+/// Đọc giá trị robot (pulse/speed) từ khối 4 D register liên tiếp,
+/// theo MODE đã chọn ở hằng số ROBOT_VALUE_MODE phía trên.
+///
+/// Trả về i64 để chứa được cả trường hợp 32-bit (MODE 1/2) lẫn
+/// 64-bit thật (MODE 3/4) mà không tràn số.
+///
+/// addr = vị trí đầu khối 4 word (vd: D100 cho pulse1, D104 cho pulse2...)
+fn d_words_to_robot_value(d: &[u16], addr: usize) -> i64 {
+    match ROBOT_VALUE_MODE {
+        // ── MODE 1: 32-bit, D[addr]=LSB, D[addr+1]=MSB (2 word đầu) ──
+        1 => {
+            let w0 = d[addr]     as u32;
+            let w1 = d[addr + 1] as u32;
+            let raw = w0 | (w1 << 16);
+            (raw as i32) as i64
+        }
+
+        // ── MODE 2: 32-bit, D[addr]=MSB, D[addr+1]=LSB (2 word đầu, đảo) ──
+        2 => {
+            let w0 = d[addr]     as u32; // MSB
+            let w1 = d[addr + 1] as u32; // LSB
+            let raw = w1 | (w0 << 16);
+            (raw as i32) as i64
+        }
+
+        // ── MODE 3: 64-bit thật, D[addr..addr+3] = LSB → MSB ──────
+        3 => {
+            let w0 = d[addr]     as u64; // bit 0-15  (LSB)
+            let w1 = d[addr + 1] as u64; // bit 16-31
+            let w2 = d[addr + 2] as u64; // bit 32-47
+            let w3 = d[addr + 3] as u64; // bit 48-63 (MSB)
+            let raw = w0 | (w1 << 16) | (w2 << 32) | (w3 << 48);
+            raw as i64
+        }
+
+        // ── MODE 4: 64-bit thật, D[addr..addr+3] = MSB → LSB ──────
+        4 => {
+            let w0 = d[addr]     as u64; // bit 48-63 (MSB)
+            let w1 = d[addr + 1] as u64; // bit 32-47
+            let w2 = d[addr + 2] as u64; // bit 16-31
+            let w3 = d[addr + 3] as u64; // bit 0-15  (LSB)
+            let raw = w3 | (w2 << 16) | (w1 << 32) | (w0 << 48);
+            raw as i64
+        }
+
+        // ── MODE 5: 64-bit SỐ THỰC (IEEE 754 double), LSB→MSB ─────
+        // Đã xác nhận thực tế PLC lưu vị trí trục dạng LREAL/double.
+        // Diễn giải 8 byte theo f64, làm tròn về số nguyên gần nhất
+        // (xung vẫn cần là số nguyên khi hiển thị/dùng cho động học),
+        // rồi trả về i64 để tương thích với toàn bộ pipeline hiện có
+        // (cache, GUI, JSON...) vốn đang dùng kiểu i64.
+        5 => {
+            let w0 = d[addr]     as u64; // bit 0-15  (LSB)
+            let w1 = d[addr + 1] as u64; // bit 16-31
+            let w2 = d[addr + 2] as u64; // bit 32-47
+            let w3 = d[addr + 3] as u64; // bit 48-63 (MSB)
+            let raw = w0 | (w1 << 16) | (w2 << 32) | (w3 << 48);
+            let fval = f64::from_bits(raw);
+            // NaN/Inf phòng hờ (dữ liệu PLC lỗi/chưa init) → trả 0 thay vì panic
+            if !fval.is_finite() {
+                0
+            } else {
+                fval.round() as i64
+            }
+        }
+
+        _ => panic!("ROBOT_VALUE_MODE={ROBOT_VALUE_MODE} không hợp lệ — chỉ 1..5"),
+    }
+}
+
+/// Số word cần đồng bộ timestamp tuỳ theo mode đang bật.
+/// MODE 1/2 chỉ dùng 2 word đầu → chỉ cần D[addr], D[addr+1] đồng bộ.
+/// MODE 3/4 dùng đủ 4 word → cần cả 4 word đồng bộ với nhau.
+const fn robot_value_word_span() -> usize {
+    match ROBOT_VALUE_MODE {
+        1 | 2 => 2,
+        3 | 4 | 5 => 4,
+        _ => 2,
+    }
+}
+
+/// ── DEBUG: diễn giải cùng 1 khối 4 word theo NHIỀU kiểu khác nhau ──
+/// Không thay logic chính (d_words_to_robot_value vẫn theo
+/// ROBOT_VALUE_MODE). Hàm này chỉ in ra để bạn so sánh trực quan:
+///   - i32_le : 2 word đầu, ghép số nguyên có dấu 32-bit (LSB trước)
+///   - i64_le : đủ 4 word, ghép số nguyên có dấu 64-bit (LSB trước)
+///   - f32_le : 2 word đầu, diễn giải theo IEEE 754 float 32-bit
+///   - f64_le : đủ 4 word, diễn giải theo IEEE 754 double 64-bit
+/// Dùng khi nghi ngờ PLC có thể đang lưu Float thay vì số nguyên,
+/// hoặc muốn xem giá trị "thô" dưới mọi góc độ để đối chiếu với số
+/// thật hiển thị trên PLC/driver.
+fn debug_decode_all_formats(d: &[u16], addr: usize) -> (i32, i64, f32, f64) {
+    let w0 = d[addr]     as u32;
+    let w1 = d[addr + 1] as u32;
+    let w2 = d[addr + 2] as u32;
+    let w3 = d[addr + 3] as u32;
+
+    let raw32 = w0 | (w1 << 16);                                   // 2 word đầu
+    let raw64 = (w0 as u64) | ((w1 as u64) << 16)
+              | ((w2 as u64) << 32) | ((w3 as u64) << 48);          // đủ 4 word
+
+    let as_i32 = raw32 as i32;
+    let as_i64 = raw64 as i64;
+    let as_f32 = f32::from_bits(raw32);
+    let as_f64 = f64::from_bits(raw64);
+
+    (as_i32, as_i64, as_f32, as_f64)
+}
+
+/// Đọc giá trị 1 mục robot (pulse1/2/3, speed1/2/3) một cách an toàn
+/// trước race condition: PLC ghi từng word riêng lẻ qua FC06, nên các
+/// word của 1 giá trị có thể được ghi cách nhau vài chục ms. Nếu đọc
+/// đúng lúc giữa — 1 số word mới, 1 số word còn cũ — số ghép ra sẽ
+/// sai/loạn (như log đã quan sát).
+///
+/// Số word cần đồng bộ phụ thuộc ROBOT_VALUE_MODE (xem hằng số ở đầu
+/// file): MODE 1/2 chỉ cần 2 word đầu đồng bộ, MODE 3/4 cần đủ 4 word.
+///
+/// Cách xử lý: so sánh timestamp ghi cuối của các word liên quan. Nếu
+/// lệch lớn nhất <= ROBOT_WORD_SYNC_MS, coi là đã đồng bộ, ghép giá trị
+/// mới và cập nhật cache. Nếu lệch quá ngưỡng (đang ghi giữa chừng),
+/// KHÔNG ghép giá trị mới — trả về giá trị cache cuối đã tin tưởng,
+/// tránh hiển thị số rác nhất thời cho GUI/PLC log.
+///
+/// LƯU Ý: nhận `d` (slice D register) đã lock sẵn từ bên ngoài — hàm này
+/// CHỈ tự lock `d_write_ms` và `d_robot_cache` (2 mutex độc lập), không
+/// tự lock lại `slave_d`, để tránh deadlock khi gọi trong lúc caller đã
+/// đang giữ lock `slave_d`.
+fn read_robot_value_safe(shared: &AppShared, d: &[u16], addr: usize, cache_idx: usize) -> i64 {
+    let span = robot_value_word_span(); // 2 (MODE 1/2) hoặc 4 (MODE 3/4)
+
+    let timestamps: Vec<u64> = {
+        let wm = shared.d_write_ms.lock().unwrap();
+        (0..span).map(|i| wm[addr + i]).collect()
+    };
+
+    // Chưa word nào từng được ghi → trả cache (0) mà không log spam
+    // để tránh nhiễu khi mới khởi động.
+    if timestamps.iter().all(|&t| t == 0) {
+        return shared.d_robot_cache.lock().unwrap()[cache_idx];
+    }
+
+    let t_min = *timestamps.iter().min().unwrap();
+    let t_max = *timestamps.iter().max().unwrap();
+    let diff_ms = t_max - t_min;
+    let in_sync = diff_ms <= ROBOT_WORD_SYNC_MS;
+
+    if in_sync {
+        let val = d_words_to_robot_value(d, addr);
+        shared.d_robot_cache.lock().unwrap()[cache_idx] = val;
+        val
+    } else {
+        // Log để dễ điều chỉnh ROBOT_WORD_SYNC_MS nếu Δt thực tế lớn hơn ngưỡng
+        println!("[WARN] D{addr} sync fail (mode={ROBOT_VALUE_MODE}, span={span}): Δt={diff_ms}ms — dùng cache");
+        shared.d_robot_cache.lock().unwrap()[cache_idx]
+    }
+}
+
+fn m_name(addr: u16) -> &'static str {
+    if addr >= M_IO_START && addr < M_IO_START + M_IO_COUNT {
+        M_IO_NAMES[(addr - M_IO_START) as usize]
+    } else if addr == M_CONN_OK {
+        "COMM_OK"
+    } else {
+        "M?"
+    }
+}
+
+// ================================================================
+//  PC SLAVE SERVER
+//  PLC kết nối vào đây; PC lắng nghe thụ động.
+//  Cấu hình PLC: IP=<ip_may_tinh> Port=502 Unit=1
+//  Chỉ dùng port 502 — không fallback. Trên Windows port 502 cần
+//  quyền Admin, phải chạy chương trình bằng 'Run as Administrator'.
+// ================================================================
+
+fn pc_slave_server(shared: Arc<AppShared>, running: Arc<AtomicBool>) {
+    let (listener, bound) = match TcpListener::bind(BIND_ADDR) {
+        Ok(l) => {
+            println!("[SLAVE] PC Slave: {BIND_ADDR}");
+            (l, BIND_ADDR)
+        }
+        Err(e) => {
+            eprintln!("[SLAVE] Port 502 lỗi ({e}) — chỉ dùng port 502, không fallback.");
+            eprintln!("[SLAVE] Windows: chạy 'Run as Administrator' rồi thử lại.");
+            return;
+        }
+    };
+
+    let port = &bound[bound.rfind(':').unwrap()+1..];
+    println!("[SLAVE] ─────────────────────────────────────────────────");
+    println!("[SLAVE] Cấu hình PLC Xinjie XHD kết nối vào PC:");
+    println!("[SLAVE]   IP PC      = <ip_may_tinh>  (ipconfig để xem)");
+    println!("[SLAVE]   Port       = {port}");
+    println!("[SLAVE]   Unit ID    = {UNIT_ID}");
+    println!("[SLAVE]   FC03 đọc  : addr={D_LOT_START} count={D_LOT_COUNT}  (tọa độ lót)");
+    println!("[SLAVE]   FC16 ghi  : addr={D_ROBOT_START} count={D_ROBOT_COUNT}  (D100..D123 robot 64-bit)");
+    println!("[SLAVE]   FC05/FC15 ghi: M100..M114 và M2000  (trạng thái PLC)");
+    println!("[SLAVE] ─────────────────────────────────────────────────");
+
+    listener.set_nonblocking(true).ok();
+
+    while running.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, addr)) => {
+                let n = shared.tcp_clients.fetch_add(1, Ordering::Relaxed) + 1;
+                println!("[SLAVE] >>> PLC kết nối: {addr} (tổng {n})");
+                let sh = Arc::clone(&shared);
+                let r  = Arc::clone(&running);
+                std::thread::spawn(move || handle_plc_client(stream, sh, r, addr.to_string()));
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock =>
+                std::thread::sleep(Duration::from_millis(5)),
+            Err(e) => eprintln!("[SLAVE] {e}"),
+        }
+    }
+}
+
+fn handle_plc_client(
+    mut stream: TcpStream,
+    shared:     Arc<AppShared>,
+    running:    Arc<AtomicBool>,
+    peer:       String,
+) {
+    stream.set_read_timeout(Some(Duration::from_millis(200))).ok();
+    let mut buf   = [0u8; 512];
+    let mut n_req = 0u64;
+    let mut t_log = Instant::now();
+
+    loop {
+        if !running.load(Ordering::Relaxed) { break; }
+        if !shared.tcp_enabled.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+
+        let n = match stream.read(&mut buf) {
+            Ok(0) => {
+                shared.tcp_clients.fetch_sub(1, Ordering::Relaxed);
+                println!("[SLAVE] <<< {peer} ngắt. {n_req} request.");
+                return;
+            }
+            Ok(n) => n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut
+                       || e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(e) => { eprintln!("[SLAVE] {peer}: {e}"); break; }
+        };
+        if n < 8 { continue; }
+
+        let tid  = u16::from_be_bytes([buf[0], buf[1]]);
+        let unit = buf[6];
+        let fc   = buf[7];
+
+        if u16::from_be_bytes([buf[2], buf[3]]) != 0 { continue; }
+        if unit != UNIT_ID {
+            let _ = stream.write_all(&resp_exception(tid, unit, fc, 0x0B));
+            continue;
+        }
+
+        let resp = match fc {
+
+            // ── FC03: PLC đọc D register từ PC ──────────────────
+            0x03 => {
+                if n < 12 { continue; }
+                let addr  = u16::from_be_bytes([buf[8], buf[9]]);
+                let count = u16::from_be_bytes([buf[10], buf[11]]);
+                let end   = addr as usize + count as usize;
+                if count == 0 || end > D_SIZE {
+                    println!("[SLAVE] {peer} FC03 addr={addr} count={count} — ngoài D_SIZE={D_SIZE}");
+                    resp_exception(tid, unit, fc, 0x02)
+                } else {
+                    let d = shared.slave_d.lock().unwrap();
+                    resp_fc03(tid, unit, &d[addr as usize..end])
+                }
+            }
+
+            // ── FC06: PLC ghi 1 D register (1 word) lên PC ───────
+            0x06 => {
+                if n < 12 { continue; }
+                let addr = u16::from_be_bytes([buf[8], buf[9]]);
+                let val  = u16::from_be_bytes([buf[10], buf[11]]);
+                if addr as usize >= D_SIZE {
+                    resp_exception(tid, unit, fc, 0x02)
+                } else {
+                    let now_ms = shared.app_start.elapsed().as_millis() as u64;
+
+                    // ── Ghi data + timestamp trong cùng 1 khối, không tách lock ──
+                    // Tránh gap: nếu tách 2 lock riêng, thread IPC có thể đọc
+                    // slave_d (đã cập nhật) trong khi d_write_ms vẫn còn cũ
+                    // → sync check fail → cache cũ (0) được trả về → số loạn.
+                    {
+                        let mut d  = shared.slave_d.lock().unwrap();
+                        let mut wm = shared.d_write_ms.lock().unwrap();
+                        d[addr as usize]  = val;
+                        wm[addr as usize] = now_ms;
+                    }
+
+                    // Nếu word vừa ghi thuộc vùng robot, thử ghép và cập nhật
+                    // cache ngay (khi đủ số word liên quan đã đồng bộ — số
+                    // word phụ thuộc ROBOT_VALUE_MODE: 2 hoặc 4).
+                    if addr >= D_ROBOT_START && addr < D_ROBOT_START + D_ROBOT_COUNT {
+                        let rs   = D_ROBOT_START as usize;
+                        let span = robot_value_word_span(); // 2 hoặc 4
+                        // Mỗi giá trị chiếm khối 4 word: offset đầu khối 0,4,8,12,16,20
+                        let rel       = (addr as usize).saturating_sub(rs);
+                        let pair_base = (rel / 4) * 4 + rs; // offset đầu khối 4-word
+                        let cache_idx = rel / 4;             // 0..5
+                        if cache_idx < 6 {
+                            let d  = shared.slave_d.lock().unwrap();
+                            let wm = shared.d_write_ms.lock().unwrap();
+                            let ts: Vec<u64> = (0..span).map(|i| wm[pair_base + i]).collect();
+                            let any_zero = ts.iter().any(|&t| t == 0);
+                            let diff_ms  = ts.iter().max().unwrap() - ts.iter().min().unwrap();
+                            let in_sync  = !any_zero && diff_ms <= ROBOT_WORD_SYNC_MS;
+                            if in_sync {
+                                let val64 = d_words_to_robot_value(&d[..], pair_base);
+                                shared.d_robot_cache.lock().unwrap()[cache_idx] = val64;
+                                println!("[SLAVE] PLC FC06 D{addr}={val}  → cache[{cache_idx}]={val64} (mode={ROBOT_VALUE_MODE}, sync ok, Δt={diff_ms}ms)");
+                            } else {
+                                println!("[SLAVE] PLC FC06 D{addr}={val}  (raw, chờ word kia — mode={ROBOT_VALUE_MODE}, Δt={})",
+                                    if any_zero { "n/a".to_string() } else { diff_ms.to_string() });
+                            }
+                        }
+                    }
+                    resp_fc06(tid, unit, addr, val)
+                }
+            }
+
+            // ── FC16: PLC ghi D register lên PC ─────────────────
+            0x10 => {
+                if n < 13 { continue; }
+                let addr  = u16::from_be_bytes([buf[8], buf[9]]);
+                let count = u16::from_be_bytes([buf[10], buf[11]]);
+                let bc    = buf[12] as usize;
+                let end   = addr as usize + count as usize;
+                if end > D_SIZE || n < 13 + bc {
+                    resp_exception(tid, unit, fc, 0x02)
+                } else {
+                    let now_ms = shared.app_start.elapsed().as_millis() as u64;
+                    {
+                        // ── Ghi data + timestamp trong cùng 1 lock scope ──
+                        // FC16 ghi nhiều word cùng lúc nên cả 2 lock phải
+                        // được giữ đồng thời — không tách ra 2 khối riêng.
+                        let mut d  = shared.slave_d.lock().unwrap();
+                        let mut wm = shared.d_write_ms.lock().unwrap();
+                        for i in 0..count as usize {
+                            let hi = buf[13 + i*2] as u16;
+                            let lo = buf[14 + i*2] as u16;
+                            d[addr as usize + i]  = (hi << 8) | lo;
+                            wm[addr as usize + i] = now_ms;
+                        }
+
+                        // Cập nhật cache ngay sau khi ghi, trong cùng lock
+                        if addr >= D_ROBOT_START && addr < D_ROBOT_START + D_ROBOT_COUNT {
+                            let rs   = D_ROBOT_START as usize;
+                            let span = robot_value_word_span(); // 2 hoặc 4, theo ROBOT_VALUE_MODE
+                            let names = ["pulse1", "pulse2", "pulse3", "speed1", "speed2", "speed3"];
+                            // 6 giá trị, mỗi cái chiếm khối 4 word; offset đầu khối: 0,4,8,12,16,20
+                            let bases: [usize; 6] = [rs, rs + 4, rs + 8, rs + 12, rs + 16, rs + 20];
+                            let mut cache = shared.d_robot_cache.lock().unwrap();
+                            let mut updated: Vec<(&str, i64)> = Vec::new();
+                            for (idx, &base) in bases.iter().enumerate() {
+                                // Chỉ cập nhật + log nếu đủ `span` word của khối
+                                // nằm trong vùng vừa ghi — tránh đọc nhầm word
+                                // chưa từng được PLC ghi (mặc định = 0).
+                                if base >= addr as usize && base + span <= end {
+                                    let v = d_words_to_robot_value(&d[..], base);
+                                    cache[idx] = v;
+                                    updated.push((names[idx], v));
+                                }
+                            }
+                            if !updated.is_empty() {
+                                let summary = updated.iter()
+                                    .map(|(n, v)| format!("{n}={v}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                println!("[SLAVE] PLC FC16 D{addr}..D{} (mode={ROBOT_VALUE_MODE}, span={span}): {summary}",
+                                    addr + count - 1);
+                            }
+
+                            // ── DEBUG: in 4 cách diễn giải (i32/i64/f32/f64) ──
+                            // cho từng khối đã đủ 4 word trong lần ghi này, để
+                            // đối chiếu trực tiếp với số thật trên PLC/driver
+                            // và xác định PLC đang lưu số nguyên hay số thực.
+                            for (idx, &base) in bases.iter().enumerate() {
+                                if base >= addr as usize && base + 4 <= end {
+                                    let (i32v, i64v, f32v, f64v) = debug_decode_all_formats(&d[..], base);
+                                    println!("[DEBUG] {} D{base}: i32={i32v}  i64={i64v}  f32={f32v:.6}  f64={f64v:.6}",
+                                        names[idx]);
+                                }
+                            }
+                        }
+                    }
+                    resp_fc16(tid, unit, addr, count)
+                }
+            }
+
+            // ── FC01: PLC đọc M coil từ PC ───────────────────────
+            0x01 => {
+                if n < 12 { continue; }
+                let addr  = u16::from_be_bytes([buf[8], buf[9]]);
+                let count = u16::from_be_bytes([buf[10], buf[11]]);
+                let end   = addr as usize + count as usize;
+                if count == 0 || end > M_SIZE {
+                    resp_exception(tid, unit, fc, 0x02)
+                } else {
+                    let m = shared.slave_m.lock().unwrap();
+                    resp_fc01(tid, unit, &m[addr as usize..end])
+                }
+            }
+
+            // ── FC05: PLC ghi 1 M coil lên PC ────────────────────
+            0x05 => {
+                if n < 12 { continue; }
+                let addr = u16::from_be_bytes([buf[8], buf[9]]);
+                let val  = u16::from_be_bytes([buf[10], buf[11]]);
+                if addr as usize >= M_SIZE {
+                    resp_exception(tid, unit, fc, 0x02)
+                } else {
+                    let coil = val == 0xFF00;
+                    shared.slave_m.lock().unwrap()[addr as usize] = coil;
+                    let name = m_name(addr);
+                    println!("[SLAVE] PLC FC05 M{addr}({name}) = {coil}");
+                    resp_fc05(tid, unit, addr, coil)
+                }
+            }
+
+            // ── FC15: PLC ghi nhiều M coil lên PC ────────────────
+            0x0F => {
+                if n < 13 { continue; }
+                let addr  = u16::from_be_bytes([buf[8], buf[9]]);
+                let count = u16::from_be_bytes([buf[10], buf[11]]);
+                let bc    = buf[12] as usize;
+                let end   = addr as usize + count as usize;
+                if end > M_SIZE || n < 13 + bc {
+                    resp_exception(tid, unit, fc, 0x02)
+                } else {
+                    let mut m = shared.slave_m.lock().unwrap();
+                    for i in 0..count as usize {
+                        let byte_i = i / 8;
+                        let bit_i  = i % 8;
+                        if 13 + byte_i < n {
+                            m[addr as usize + i] = (buf[13 + byte_i] >> bit_i) & 1 == 1;
+                        }
+                    }
+                    resp_fc15(tid, unit, addr, count)
+                }
+            }
+
+            _ => {
+                println!("[SLAVE] {peer} FC={fc:#04x} không hỗ trợ");
+                resp_exception(tid, unit, fc, 0x01)
+            }
+        };
+
+        if stream.write_all(&resp).is_err() { break; }
+        n_req += 1;
+
+        if t_log.elapsed().as_secs() >= 5 {
+            let d = shared.slave_d.lock().unwrap();
+            let s = D_LOT_START as usize;
+            let da = d[s] as i16;
+            let rs = D_ROBOT_START as usize;
+            let p1 = read_robot_value_safe(&shared, &d[..], rs,     0);
+            let p2 = read_robot_value_safe(&shared, &d[..], rs + 4, 1);
+            let p3 = read_robot_value_safe(&shared, &d[..], rs + 8, 2);
+            println!("[SLAVE] {peer} {n_req}req/5s | dAng={:.1}° dx={:.1} dy={:.1} ok={} | pulse=({p1},{p2},{p3})",
+                da as f64 / 10.0, d[s+4] as f64 / 10.0, d[s+5] as f64 / 10.0, d[s+10]);
+            n_req = 0; t_log = Instant::now();
+        }
+    }
+    shared.tcp_clients.fetch_sub(1, Ordering::Relaxed);
+}
+
+
+// ================================================================
+//  IPC SERVER — gửi data + JPEG frame cho GUI Python (:5556)
+//  Protocol: "DATA:<json_len>:<jpeg_len>\n<json_text><jpeg_bytes>"
+// ================================================================
+
+// ================================================================
+//  ĐỌC LỆNH ĐIỀU KHIỂN TỪ GUI (gui.py) — chạy 1 thread riêng / client
+//  GUI gửi dòng text "CMD:<ký tự>\n" qua CHÍNH socket IPC :5556 đang
+//  nhận data (bidirectional). Thread này BLOCK chờ dữ liệu tới (không
+//  tốn CPU), tách khỏi vòng ghi JPEG/JSON nên không ảnh hưởng tốc độ
+//  stream hình cho GUI. Khi client đóng kết nối, thread tự thoát.
+// ================================================================
+fn ipc_read_commands(mut stream: TcpStream, shared: Arc<AppShared>) {
+    let mut buf = [0u8; 256];
+    let mut acc: Vec<u8> = Vec::new();
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break, // client đóng kết nối
+            Ok(n) => {
+                acc.extend_from_slice(&buf[..n]);
+                while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
+                    let line: Vec<u8> = acc.drain(..=pos).collect();
+                    let line = String::from_utf8_lossy(&line);
+                    let line = line.trim();
+                    if let Some(rest) = line.strip_prefix("CMD:") {
+                        if let Some(c) = rest.chars().next() {
+                            if let Ok(mut q) = shared.remote_cmd.lock() { q.push_back(c as u8); }
+                        }
+                    }
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
+                       || e.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(_) => break, // lỗi socket khác -> thoát thread
+        }
+    }
+}
+
+// ================================================================
+//  Hiển thị frame lên cửa sổ debug — chỉ thực sự vẽ khi SHOW_WINDOW.
+//  Khi tắt (mặc định), không mở cửa sổ nào -> chỉ dùng GUI Python.
+// ================================================================
+fn show_frame(display: &Mat) -> Result<()> {
+    if SHOW_WINDOW {
+        highgui::imshow(WINDOW, display)?;
+    }
+    Ok(())
+}
+
+fn ipc_server_thread(shared: Arc<AppShared>, running: Arc<AtomicBool>) {
+    let listener = match TcpListener::bind(IPC_BIND) {
+        Ok(l)  => { println!("[IPC] GUI server: {IPC_BIND}"); l }
+        Err(e) => { eprintln!("[IPC] Lỗi bind {IPC_BIND}: {e}"); return; }
+    };
+    listener.set_nonblocking(true).ok();
+    let clients: Arc<Mutex<Vec<TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
+
+    loop {
+        if !running.load(Ordering::Relaxed) { break; }
+
+        match listener.accept() {
+            Ok((s, addr)) => {
+                println!("[IPC] GUI kết nối: {addr}");
+                s.set_write_timeout(Some(Duration::from_millis(50))).ok();
+                shared.ipc_clients.fetch_add(1, Ordering::Relaxed);
+                // Clone socket để đọc lệnh remote (CMD:s, CMD:d, CMD:r, CMD:p)
+                // gửi từ gui.py, chạy trên thread riêng — không ảnh hưởng
+                // luồng ghi JPEG/JSON ở dưới.
+                if let Ok(read_clone) = s.try_clone() {
+                    let shared_for_cmd = Arc::clone(&shared);
+                    std::thread::spawn(move || ipc_read_commands(read_clone, shared_for_cmd));
+                }
+                if let Ok(mut c) = clients.lock() { c.push(s); }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => eprintln!("[IPC] {e}"),
+        }
+
+        // Build JSON
+        let (json_str, jpeg_bytes) = {
+            let v   = shared.vision.lock().unwrap();
+            let d   = shared.slave_d.lock().unwrap();
+            let m   = shared.slave_m.lock().unwrap();
+            let cli = shared.tcp_clients.load(Ordering::Relaxed);
+
+            let rs = D_ROBOT_START as usize;
+            let ls = D_LOT_START as usize;
+
+            // Serialize D lot region (D0..D10) — PC gửi cho PLC, hiển thị debug trên GUI
+            let d_lot_json: String = (0..D_LOT_COUNT as usize)
+                .map(|i| {
+                    let addr = D_LOT_START + i as u16;
+                    let raw  = d[ls + i];
+                    let signed = raw as i16;
+                    format!("{{\"a\":{addr},\"v\":{raw},\"i\":{signed}}}")
+                })
+                .collect::<Vec<_>>().join(",");
+
+            // Serialize D robot region
+            let d_robot_json: String = (0..D_ROBOT_COUNT as usize)
+                .map(|i| format!("{{\"n\":\"{}\",\"v\":{}}}",
+                    D_ROBOT_NAMES.get(i).unwrap_or(&"D?"),
+                    d[rs + i]))
+                .collect::<Vec<_>>().join(",");
+
+            // Serialize M coil
+            let m_bits: Vec<u8> = m[M_IO_START as usize..(M_IO_START+M_IO_COUNT) as usize]
+                .iter().map(|&b| b as u8).collect();
+            let mut m_entries: Vec<String> = m_bits.iter().enumerate()
+                .map(|(i, v)| {
+                    let addr = M_IO_START + i as u16;
+                    format!("{{\"a\":{addr},\"n\":\"{}\",\"v\":{v}}}", m_name(addr))
+                })
+                .collect();
+            m_entries.push(format!("{{\"a\":{M_CONN_OK},\"n\":\"{}\",\"v\":{}}}",
+                m_name(M_CONN_OK), m[M_CONN_OK as usize] as u8));
+            let m_json = m_entries.join(",");
+
+            let p1  = read_robot_value_safe(&shared, &d[..], rs,      0); // D100-D103 servo1 pulse
+            let p2  = read_robot_value_safe(&shared, &d[..], rs + 4,  1); // D104-D107 servo2 pulse
+            let p3  = read_robot_value_safe(&shared, &d[..], rs + 8,  2); // D108-D111 servo3 pulse
+            let sp1 = read_robot_value_safe(&shared, &d[..], rs + 12, 3); // D112-D115 servo1 speed
+            let sp2 = read_robot_value_safe(&shared, &d[..], rs + 16, 4); // D116-D119 servo2 speed
+            let sp3 = read_robot_value_safe(&shared, &d[..], rs + 20, 5); // D120-D123 servo3 speed
+
+            let json = format!(
+                "{{\"ang\":{:.2},\"da\":{:.2},\"dx\":{:.2},\"dy\":{:.2},\
+                 \"cx\":{:.1},\"cy\":{:.1},\"tx\":{:.1},\"ty\":{:.1},\
+                 \"hx\":{:.1},\"hy\":{:.1},\"len\":{:.1},\
+                 \"area\":{:.0},\"sol\":{:.3},\
+                 \"stk\":{},\"flip\":{},\"frz\":{},\"dmg\":{},\"ss\":{},\
+                 \"tv\":{},\"ta\":{:.2},\"tda\":{:.2},\"tflip\":{},\
+                 \"tcx\":{:.1},\"tcy\":{:.1},\"toff\":{:.1},\
+                 \"cam\":\"{}\",\"cam_h\":{:.1},\"cam_z\":{:.1},\
+                 \"rx\":{:.2},\"ry\":{:.2},\"rr\":{:.2},\"rin\":{},\
+                 \"rdx\":{:.2},\"rdy\":{:.2},\
+                 \"trx\":{:.2},\"try\":{:.2},\"trr\":{:.2},\
+                 \"ok\":{},\"cli\":{},\"fl\":{},\
+                 \"pd\":[{}],\
+                 \"pl\":[{}],\
+                 \"pm\":[{}],\
+                 \"pulse1\":{},\"pulse2\":{},\"pulse3\":{},\
+                 \"speed1\":{},\"speed2\":{},\"speed3\":{},\
+                 \"m109\":{},\"home_done\":{},\"grip_done_ng\":{},\"vision_ready\":{},\
+                 \"axis_dev\":{},\"workpiece_pc\":{}}}",
+                v.angle360, v.delta_angle, v.delta_cx, v.delta_cy,
+                v.center_x, v.center_y, v.tip_x, v.tip_y,
+                v.heel_x, v.heel_y, v.length_px,
+                v.area, v.solidity,
+                v.stacked, v.flipped, v.frozen, v.damage, v.stack_state,
+                v.top_valid, v.top_angle, v.top_delta_a, v.top_flipped,
+                v.top_cx, v.top_cy, v.top_offset,
+                CAMERA_MODEL, CAMERA_HEIGHT_MM, CAMERA_ROBOT_Z_MM,
+                v.robot_x, v.robot_y, v.robot_r, v.robot_in,
+                v.robot_dx, v.robot_dy,
+                v.top_robot_x, v.top_robot_y, v.top_robot_r,
+                v.data_ok, cli, v.flags,
+                d_robot_json,
+                d_lot_json,
+                m_json,
+                p1, p2, p3,
+                sp1, sp2, sp3,
+                m[109], m[110], m[111], m[M_VISION_READY as usize],
+                m[M_AXIS_DEVIATION as usize], m[M_WORKPIECE_DETECT as usize],
+            );
+            let jpeg = v.frame_jpeg.clone();
+            (json, jpeg)
+        };
+
+        let header = format!("DATA:{}:{}\n", json_str.len(), jpeg_bytes.len());
+        let mut packet = header.into_bytes();
+        packet.extend_from_slice(json_str.as_bytes());
+        packet.extend_from_slice(&jpeg_bytes);
+
+        let lost = {
+            let mut c = clients.lock().unwrap();
+            let before = c.len();
+            c.retain_mut(|s| s.write_all(&packet).is_ok());
+            before - c.len()
+        };
+        if lost > 0 { shared.ipc_clients.fetch_sub(lost, Ordering::Relaxed); }
+
+        std::thread::sleep(Duration::from_millis(33));
+    }
+}
+
+// ================================================================
+//  JPEG encode helper
+// ================================================================
+fn encode_jpeg(frame: &Mat) -> Vec<u8> {
+    let mut buf = core::Vector::<u8>::new();
+    let params = core::Vector::<i32>::from(vec![imgcodecs::IMWRITE_JPEG_QUALITY, JPEG_QUALITY]);
+    imgcodecs::imencode(".jpg", frame, &mut buf, &params).unwrap_or(false);
+    buf.to_vec()
+}
+
+// ================================================================
+//  JPEG ENCODER THREAD — tách encode_jpeg ra luồng riêng
+//  Nhận Mat qua channel, encode rồi ghi vào shared.vision.frame_jpeg
+//  → luồng chính không bị block bởi JPEG compress khi analyze nặng
+// ================================================================
+fn jpeg_encoder_thread(
+    shared:  Arc<AppShared>,
+    running: Arc<AtomicBool>,
+    rx:      std::sync::mpsc::Receiver<Mat>,
+) {
+    while running.load(Ordering::Relaxed) {
+        // drain channel — chỉ lấy frame MỚI NHẤT, bỏ qua frame cũ
+        let mut latest: Option<Mat> = None;
+        loop {
+            match rx.try_recv() {
+                Ok(m)  => { latest = Some(m); }
+                Err(_) => break,
+            }
+        }
+        if let Some(mat) = latest {
+            let jpeg = encode_jpeg(&mat);
+            shared.vision.lock().unwrap().frame_jpeg = jpeg;
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+// ================================================================
+//  IMAGE PROCESSING — segment, spine, stacked (unchanged from v12)
+// ================================================================
+
+fn segment_shoe(img: &Mat, klg: &Mat, ksm: &Mat) -> Result<Mat> {
+    let mut gray = Mat::default();
+    imgproc::cvt_color(img, &mut gray, imgproc::COLOR_BGR2GRAY, 0,
+        core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
+    let mut blur = Mat::default();
+    imgproc::gaussian_blur(&gray, &mut blur, Size::new(7,7), 2.0, 2.0,
+        BORDER_DEFAULT, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
+    let mut thr = Mat::default();
+    imgproc::threshold(&blur, &mut thr, 0.0, 255.0,
+        imgproc::THRESH_BINARY | imgproc::THRESH_OTSU)?;
+    let mut cl = Mat::default();
+    imgproc::morphology_ex(&thr, &mut cl, imgproc::MORPH_CLOSE,
+        klg, Point::new(-1,-1), 3, BORDER_DEFAULT, Scalar::default())?;
+    let mut op = Mat::default();
+    imgproc::morphology_ex(&cl, &mut op, imgproc::MORPH_OPEN,
+        ksm, Point::new(-1,-1), 2, BORDER_DEFAULT, Scalar::default())?;
+    let mut cf: core::Vector<core::Vector<Point>> = core::Vector::new();
+    imgproc::find_contours(&op, &mut cf,
+        RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point::new(0,0))?;
+    let mut result = Mat::zeros(op.rows(), op.cols(), core::CV_8U)?.to_mat()?;
+    imgproc::draw_contours(&mut result, &cf, -1, Scalar::all(255.0), -1,
+        imgproc::LINE_8, &core::no_array(), i32::MAX, Point::new(0,0))?;
+    Ok(result)
+}
+
+fn warp_mask(mask: &Mat, dx: f32, dy: f32, ang: f32, cx: f32, cy: f32) -> Result<Mat> {
+    let mut rot = imgproc::get_rotation_matrix_2d(
+        core::Point2f::new(cx, cy), -ang as f64, 1.0)?;
+    *rot.at_2d_mut::<f64>(0,2)? += dx as f64;
+    *rot.at_2d_mut::<f64>(1,2)? += dy as f64;
+    let mut dst = Mat::zeros(mask.rows(), mask.cols(), core::CV_8U)?.to_mat()?;
+    imgproc::warp_affine(mask, &mut dst, &rot,
+        Size::new(mask.cols(), mask.rows()),
+        imgproc::INTER_NEAREST, core::BORDER_CONSTANT, Scalar::all(0.0))?;
+    Ok(dst)
+}
+
+fn centroid(mask: &Mat) -> Result<Option<Point2f>> {
+    let m = imgproc::moments(mask, true)?;
+    if m.m00 < 1.0 { return Ok(None); }
+    Ok(Some(Point2f::new((m.m10/m.m00) as f32, (m.m01/m.m00) as f32)))
+}
+
+fn pca_angle_raw(mask: &Mat) -> Result<Option<f32>> {
+    let mut pts: Vec<f32> = Vec::new();
+    for r in 0..mask.rows() {
+        for c in 0..mask.cols() {
+            if *mask.at_2d::<u8>(r,c)? > 128 {
+                pts.push(c as f32); pts.push(r as f32);
+            }
+        }
+    }
+    let n = (pts.len()/2) as i32;
+    if n < 10 { return Ok(None); }
+    let data = unsafe { Mat::new_rows_cols_with_data_unsafe(
+        n, 2, core::CV_32F, pts.as_ptr() as *mut _, core::Mat_AUTO_STEP)? };
+    let mut pm = Mat::default(); let mut pe = Mat::default(); let mut pv = Mat::default();
+    core::pca_compute2(&data, &mut pm, &mut pe, &mut pv, 2)?;
+    let ex = *pe.at_2d::<f32>(0,0)?; let ey = *pe.at_2d::<f32>(0,1)?;
+    Ok(Some(ey.atan2(ex).to_degrees()))
+}
+
+// ================================================================
+//  PCA SPINE CORE — dùng chung cho tất cả các hàm spine
+//  Trả về: (cx, cy, ex, ey, end_a, end_b, spine_len)
+//    cx, cy    — tâm PCA (toạ độ local trong mask)
+//    ex, ey    — eigenvector trục chính (đơn vị)
+//    end_a     — đầu cuối có projection lớn nhất
+//    end_b     — đầu cuối có projection nhỏ nhất
+//    spine_len — độ dài trục chính (max_p - min_p)
+// ================================================================
+fn pca_spine_core(
+    mask:    &Mat,
+    contour: &core::Vector<Point>,
+) -> Result<Option<(f32, f32, f32, f32, Point2f, Point2f, f32)>> {
+    // Scan pixel → danh sách điểm
+    let mut pts: Vec<f32> = Vec::new();
+    for r in 0..mask.rows() {
+        for c in 0..mask.cols() {
+            if *mask.at_2d::<u8>(r, c)? > 128 {
+                pts.push(c as f32);
+                pts.push(r as f32);
+            }
+        }
+    }
+    let n = (pts.len() / 2) as i32;
+    if n < 10 { return Ok(None); }
+
+    // PCA
+    let data = unsafe {
+        Mat::new_rows_cols_with_data_unsafe(
+            n, 2, core::CV_32F, pts.as_ptr() as *mut _, core::Mat_AUTO_STEP,
+        )?
+    };
+    let mut pm = Mat::default();
+    let mut pe = Mat::default();
+    let mut pv = Mat::default();
+    core::pca_compute2(&data, &mut pm, &mut pe, &mut pv, 2)?;
+    let cx = *pm.at_2d::<f32>(0, 0)?;
+    let cy = *pm.at_2d::<f32>(0, 1)?;
+    let ex = *pe.at_2d::<f32>(0, 0)?;
+    let ey = *pe.at_2d::<f32>(0, 1)?;
+
+    // Project contour → tìm 2 đầu cuối
+    let mut max_p = f32::NEG_INFINITY;
+    let mut min_p = f32::INFINITY;
+    let mut end_a = Point2f::new(cx, cy);
+    let mut end_b = Point2f::new(cx, cy);
+    for i in 0..contour.len() {
+        let p = contour.get(i)?;
+        let dx = p.x as f32 - cx;
+        let dy = p.y as f32 - cy;
+        let proj = dx * ex + dy * ey;
+        if proj > max_p { max_p = proj; end_a = Point2f::new(p.x as f32, p.y as f32); }
+        if proj < min_p { min_p = proj; end_b = Point2f::new(p.x as f32, p.y as f32); }
+    }
+    let spine_len = max_p - min_p;
+
+    Ok(Some((cx, cy, ex, ey, end_a, end_b, spine_len)))
+}
+
+fn spine_from_mask(
+    mask:          &Mat,
+    ref_spine_vec: Point2f,
+    roi_offset:    Point2f,
+) -> Result<Option<InsoleSpine>> {
+    // Tìm contour lớn nhất (giữ nguyên điều kiện best_a > 300.0)
+    let mut contours: core::Vector<core::Vector<Point>> = core::Vector::new();
+    imgproc::find_contours(mask, &mut contours,
+        RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point::new(0, 0))?;
+    let mut best_c: Option<core::Vector<Point>> = None;
+    let mut best_a = 0f64;
+    for i in 0..contours.len() {
+        let c = contours.get(i)?;
+        let a = imgproc::contour_area(&c, false)?;
+        if a > best_a { best_a = a; best_c = Some(c); }
+    }
+    let contour = match best_c {
+        Some(c) if best_a > 300.0 => c,
+        _ => return Ok(None),
+    };
+
+    // PCA core chung
+    let (cx, cy, ex, ey, end_a, end_b, spine_len) =
+        match pca_spine_core(mask, &contour)? {
+            Some(v) => v,
+            None    => return Ok(None),
+        };
+    let _ = spine_len; // không dùng ở đây
+
+    // Chọn tip/heel theo ref_spine_vec (dot product)
+    let dot = ex * ref_spine_vec.x + ey * ref_spine_vec.y;
+    let (tip_l, heel_l) = if dot >= 0.0 { (end_a, end_b) } else { (end_b, end_a) };
+
+    let svx = tip_l.x - heel_l.x;
+    let svy = tip_l.y - heel_l.y;
+    let svl = (svx * svx + svy * svy).sqrt().max(1.0);
+    let off = roi_offset;
+
+    let center_global = Point2f::new(cx + off.x, cy + off.y);
+    let tip_global    = Point2f::new(tip_l.x + off.x, tip_l.y + off.y);
+    let heel_global   = Point2f::new(heel_l.x + off.x, heel_l.y + off.y);
+    let a360 = angle360_from_center_tip(center_global, tip_global);
+
+    Ok(Some(InsoleSpine {
+        center:    center_global,
+        tip:       tip_global,
+        heel:      heel_global,
+        spine_vec: Point2f::new(svx / svl, svy / svl),
+        angle360:  a360,
+        length_px: svl,
+    }))
+}
+
+fn spine_from_mask_width_vote(
+    mask:    &Mat,
+    contour: &core::Vector<Point>,
+    off:     Point2f,
+) -> Result<Option<InsoleSpine>> {
+    // PCA core chung
+    let (cx, cy, ex, ey, end_a, end_b, spine_len) =
+        match pca_spine_core(mask, contour)? {
+            Some(v) => v,
+            None    => return Ok(None),
+        };
+
+    // Width vote: đầu hẹp hơn = HEEL (gót), đầu rộng hơn = TIP (mũi)
+    // (đã đảo lại theo thực tế lót: mũi/forefoot rộng hơn gót)
+    let px = -ey; let py = ex;
+    let slice_w = (spine_len * TIP_SLICE_RATIO).max(15.0);
+    let width_at = |end: &Point2f| -> f32 {
+        let ep = (end.x - cx) * ex + (end.y - cy) * ey;
+        let mut pmax = f32::NEG_INFINITY; let mut pmin = f32::INFINITY;
+        for i in 0..contour.len() {
+            if let Ok(p) = contour.get(i) {
+                let dx = p.x as f32 - cx; let dy = p.y as f32 - cy;
+                if ((dx * ex + dy * ey) - ep).abs() <= slice_w {
+                    let perp = dx * px + dy * py;
+                    if perp > pmax { pmax = perp; }
+                    if perp < pmin { pmin = perp; }
+                }
+            }
+        }
+        if pmax > pmin { pmax - pmin } else { f32::INFINITY }
+    };
+    let wa = width_at(&end_a); let wb = width_at(&end_b);
+    let (heel_l, tip_l) = if wa <= wb { (end_a, end_b) } else { (end_b, end_a) };
+
+    let svx = tip_l.x - heel_l.x; let svy = tip_l.y - heel_l.y;
+    let svl = (svx * svx + svy * svy).sqrt().max(1.0);
+
+    let center_global = Point2f::new(cx + off.x, cy + off.y);
+    let tip_global    = Point2f::new(tip_l.x + off.x, tip_l.y + off.y);
+    let heel_global   = Point2f::new(heel_l.x + off.x, heel_l.y + off.y);
+    let a360 = angle360_from_center_tip(center_global, tip_global);
+
+    Ok(Some(InsoleSpine {
+        center:    center_global,
+        tip:       tip_global,
+        heel:      heel_global,
+        spine_vec: Point2f::new(svx / svl, svy / svl),
+        angle360:  a360,
+        length_px: svl,
+    }))
+}
+
+fn analyze_stacked_v9(
+    mask_obs:   &Mat,
+    ref_mask:   &Mat,
+    roi_offset: Point,
+    rs:         &RefSpine,
+    warm:       &mut RegSeedState,
+) -> Result<StackedAnalysis> {
+    let off    = Point2f::new(roi_offset.x as f32, roi_offset.y as f32);
+    let ref_cx = rs.center.x - off.x;
+    let ref_cy = rs.center.y - off.y;
+    let obs_area = core::count_non_zero(mask_obs)? as f32;
+    if obs_area < 1.0 { return Ok(StackedAnalysis::default()); }
+
+    let mut not_ref = Mat::default();
+    core::bitwise_not(ref_mask, &mut not_ref, &core::no_array())?;
+    let mut residual = Mat::default();
+    core::bitwise_and(mask_obs, &not_ref, &mut residual, &core::no_array())?;
+    let residual_area = core::count_non_zero(&residual)? as f64;
+
+    let use_residual_cost = residual_area > RESIDUAL_MIN_AREA;
+
+    let (seed_dx, seed_dy) = if use_residual_cost {
+        match centroid(&residual)? {
+            Some(rc) => (rc.x - ref_cx, rc.y - ref_cy),
+            None => match centroid(mask_obs)? {
+                Some(bc) => (bc.x - ref_cx, bc.y - ref_cy),
+                None => (0.0f32, 0.0f32),
+            },
+        }
+    } else {
+        match centroid(mask_obs)? {
+            Some(bc) => (bc.x - ref_cx, bc.y - ref_cy),
+            None => (0.0f32, 0.0f32),
+        }
+    };
+
+    let seed_ang = if residual_area > RESIDUAL_MIN_AREA * 3.0 {
+        match pca_angle_raw(&residual)? {
+            Some(ra) => {
+                let ref_pca = rs.angle360 - 90.0;
+                delta_angle_signed(ref_pca, ra)
+            }
+            None => 0.0,
+        }
+    } else { 0.0 };
+
+    let ds = REG_DOWNSAMPLE;
+    let small_w = (ref_mask.cols() / ds).max(1);
+    let small_h = (ref_mask.rows() / ds).max(1);
+    let small_sz = Size::new(small_w, small_h);
+
+    let mut ref_small = Mat::default();
+    imgproc::resize(ref_mask, &mut ref_small, small_sz, 0.0, 0.0, imgproc::INTER_NEAREST)?;
+    let mut residual_small = Mat::default();
+    imgproc::resize(&residual, &mut residual_small, small_sz, 0.0, 0.0, imgproc::INTER_NEAREST)?;
+    let mut obs_small = Mat::default();
+    imgproc::resize(mask_obs, &mut obs_small, small_sz, 0.0, 0.0, imgproc::INTER_NEAREST)?;
+
+    let ref_cx_s = ref_cx / ds as f32;
+    let ref_cy_s = ref_cy / ds as f32;
+
+    let cost_residual_small = |dx: f32, dy: f32, da: f32| -> Result<i32> {
+        let top = warp_mask(&ref_small, dx/ds as f32, dy/ds as f32, da, ref_cx_s, ref_cy_s)?;
+        let mut inter_rt = Mat::default();
+        core::bitwise_and(&residual_small, &top, &mut inter_rt, &core::no_array())?;
+        let miss = core::count_non_zero(&residual_small)? - core::count_non_zero(&inter_rt)?;
+        let mut not_obs = Mat::default();
+        core::bitwise_not(&obs_small, &mut not_obs, &core::no_array())?;
+        let mut top_outside = Mat::default();
+        core::bitwise_and(&top, &not_obs, &mut top_outside, &core::no_array())?;
+        let halluc = core::count_non_zero(&top_outside)?;
+        Ok(miss + halluc * 2)
+    };
+
+    let warp_cost_small = |dx: f32, dy: f32, da: f32| -> Result<i32> {
+        if use_residual_cost {
+            cost_residual_small(dx, dy, da)
+        } else {
+            let top = warp_mask(&ref_small, dx/ds as f32, dy/ds as f32, da, ref_cx_s, ref_cy_s)?;
+            let mut not_obs = Mat::default();
+            core::bitwise_not(&obs_small, &mut not_obs, &core::no_array())?;
+            let mut top_outside = Mat::default();
+            core::bitwise_and(&top, &not_obs, &mut top_outside, &core::no_array())?;
+            let halluc = core::count_non_zero(&top_outside)?;
+            let mut inter_to = Mat::default();
+            core::bitwise_and(&top, &obs_small, &mut inter_to, &core::no_array())?;
+            let covered = core::count_non_zero(&inter_to)?;
+            let top_px = core::count_non_zero(&top)? as i32;
+            let miss = (top_px - covered).max(0);
+            Ok(miss + halluc * 3)
+        }
+    };
+
+    // REG_SEED_RANGE_PX/REG_SEARCH_RANGE_DEG (quét thô toàn cục cũ) không
+    // còn dùng trực tiếp — giữ lại 2 hằng số này trong phần cấu hình phía
+    // trên để dễ khôi phục quét toàn cục nếu cần fallback sau này.
+
+    // ── Hill-climb rẻ (downsampled) dùng chung cho mọi điểm xuất phát ──
+    let hill_small = |sdx: f32, sdy: f32, sda: f32| -> Result<(f32, f32, f32, i32)> {
+        let mut dx = sdx; let mut dy = sdy; let mut da = sda;
+        let mut cost = warp_cost_small(dx, dy, da)?;
+        let mut spx = REG_INIT_STEP_PX;
+        let mut sdg = REG_INIT_STEP_DEG;
+        for _ in 0..REG_HILL_ITERS {
+            let mut imp = false;
+            for &(ddx, ddy, dda) in &[
+                (spx,0.0,0.0),(-spx,0.0,0.0),
+                (0.0,spx,0.0),(0.0,-spx,0.0),
+                (0.0,0.0,sdg),(0.0,0.0,-sdg),
+            ] {
+                let c = warp_cost_small(dx+ddx, dy+ddy, da+dda)?;
+                if c < cost { cost = c; dx += ddx; dy += ddy; da += dda; imp = true; }
+            }
+            if !imp {
+                spx = (spx/2.0).max(REG_FINE_STEP_PX);
+                sdg = (sdg/2.0).max(REG_FINE_STEP_DEG);
+                if spx <= REG_FINE_STEP_PX && sdg <= REG_FINE_STEP_DEG { break; }
+            }
+        }
+        Ok((dx, dy, da, cost))
+    };
+
+    // ── Ứng viên bổ sung: hướng/tâm SƠ BỘ từ PCA toàn khối mask_obs ──
+    // `residual` ở trên (mask_obs & !ref_mask THÔ, chưa xoay) có thể sai
+    // lệch nghiêm trọng khi CẢ KHỐI (lót dưới + lót trên) bị xoay so với
+    // mẫu tham chiếu — lúc đó residual gần như trùng luôn với mask_obs,
+    // khiến seed_ang/seed_dx/seed_dy tính từ residual gần như vô nghĩa
+    // (không còn phản ánh đúng "phần dư thật của lớp trên"), làm hill-
+    // climb xuất phát từ điểm rất xa lời giải thật -> lót trên (H2/T2)
+    // định vị sai như quan sát thực tế. PCA của TOÀN mask_obs (coi tạm
+    // như 1 khối duy nhất) cho điểm xuất phát đáng tin cậy hơn nhiều,
+    // vì nó luôn bắt đúng trục dài thật của vật thể bất kể xoay bao
+    // nhiêu độ.
+    let pre_spine = spine_from_mask(mask_obs, rs.spine_vec, off)?;
+    let (pre_dx, pre_dy, pre_ang) = match &pre_spine {
+        Some(s) => (
+            s.center.x - rs.center.x,
+            s.center.y - rs.center.y,
+            delta_angle_signed(rs.angle360, s.angle360),
+        ),
+        None => (seed_dx, seed_dy, seed_ang),
+    };
+
+    // ── Các điểm xuất phát ứng viên ──────────────────────────────────
+    // 1) seed_ang từ PCA residual — LƯU Ý: PCA vector riêng không có
+    //    chiều xác định (mơ hồ ±180°), nên luôn thử CẢ HAI khả năng
+    //    (seed_ang và seed_ang+180) mỗi frame, không chỉ 1 chiều.
+    // 2) pre_ang từ PCA toàn khối — cũng mơ hồ ±180°, thử cả 2 chiều.
+    // 3) warm.da (nếu có) — vị trí khóa tốt nhất frame trước, giúp hội
+    //    tụ nhanh khi vật đứng yên, nhưng KHÔNG còn là điểm xuất phát
+    //    DUY NHẤT như trước nữa -> không còn bị "kẹt" vĩnh viễn ở 1
+    //    hướng sai khi so sánh thua các ứng viên seed tính lại mỗi frame.
+    let mut candidates: Vec<(f32, f32, f32)> = vec![
+        (seed_dx, seed_dy, seed_ang),
+        (seed_dx, seed_dy, seed_ang + 180.0),
+        (pre_dx, pre_dy, pre_ang),
+        (pre_dx, pre_dy, pre_ang + 180.0),
+    ];
+    if warm.active { candidates.push((warm.dx, warm.dy, warm.da)); }
+
+    let mut bdx = seed_dx;
+    let mut bdy = seed_dy;
+    let mut bda = seed_ang;
+    let mut best_cost = i32::MAX;
+    for (cdx, cdy, cda) in candidates {
+        let (rdx, rdy, rda, rcost) = hill_small(cdx, cdy, cda)?;
+        if rcost < best_cost { best_cost = rcost; bdx = rdx; bdy = rdy; bda = rda; }
+    }
+
+    let cost_residual_full = |dx: f32, dy: f32, da: f32| -> Result<i32> {
+        let top = warp_mask(ref_mask, dx, dy, da, ref_cx, ref_cy)?;
+        let mut inter_rt = Mat::default();
+        core::bitwise_and(&residual, &top, &mut inter_rt, &core::no_array())?;
+        let miss = core::count_non_zero(&residual)? - core::count_non_zero(&inter_rt)?;
+        let mut not_obs = Mat::default();
+        core::bitwise_not(mask_obs, &mut not_obs, &core::no_array())?;
+        let mut top_outside = Mat::default();
+        core::bitwise_and(&top, &not_obs, &mut top_outside, &core::no_array())?;
+        let halluc = core::count_non_zero(&top_outside)?;
+        Ok(miss + halluc * 2)
+    };
+
+    let top0 = warp_mask(ref_mask, bdx, bdy, bda, ref_cx, ref_cy)?;
+    let mut best_cost_full = if use_residual_cost {
+        cost_residual_full(bdx, bdy, bda)?
+    } else {
+        let mut not_obs_f = Mat::default();
+        core::bitwise_not(mask_obs, &mut not_obs_f, &core::no_array())?;
+        let mut top_out_f = Mat::default();
+        core::bitwise_and(&top0, &not_obs_f, &mut top_out_f, &core::no_array())?;
+        let halluc_f = core::count_non_zero(&top_out_f)?;
+        let mut inter_tf = Mat::default();
+        core::bitwise_and(&top0, mask_obs, &mut inter_tf, &core::no_array())?;
+        let covered_f = core::count_non_zero(&inter_tf)?;
+        let top_px_f = core::count_non_zero(&top0)? as i32;
+        (top_px_f - covered_f).max(0) + halluc_f * 3
+    };
+
+    let mut spx = REG_INIT_STEP_PX / 2.0;
+    let mut sdg = REG_INIT_STEP_DEG / 2.0;
+    for _ in 0..REG_HILL_ITERS {
+        let mut imp = false;
+        for &(ddx, ddy, dda) in &[
+            (spx,0.0,0.0),(-spx,0.0,0.0),
+            (0.0,spx,0.0),(0.0,-spx,0.0),
+            (0.0,0.0,sdg),(0.0,0.0,-sdg),
+        ] {
+            let cost = if use_residual_cost {
+                cost_residual_full(bdx+ddx, bdy+ddy, bda+dda)?
+            } else {
+                let top = warp_mask(ref_mask, bdx+ddx, bdy+ddy, bda+dda, ref_cx, ref_cy)?;
+                let mut not_obs_h = Mat::default();
+                core::bitwise_not(mask_obs, &mut not_obs_h, &core::no_array())?;
+                let mut top_out_h = Mat::default();
+                core::bitwise_and(&top, &not_obs_h, &mut top_out_h, &core::no_array())?;
+                let halluc_h = core::count_non_zero(&top_out_h)?;
+                let mut inter_th = Mat::default();
+                core::bitwise_and(&top, mask_obs, &mut inter_th, &core::no_array())?;
+                let covered_h = core::count_non_zero(&inter_th)?;
+                let top_px_h = core::count_non_zero(&top)? as i32;
+                (top_px_h - covered_h).max(0) + halluc_h * 3
+            };
+            if cost < best_cost_full {
+                best_cost_full = cost; bdx+=ddx; bdy+=ddy; bda+=dda; imp=true;
+            }
+        }
+        if !imp {
+            spx = (spx/2.0).max(REG_FINE_STEP_PX);
+            sdg = (sdg/2.0).max(REG_FINE_STEP_DEG);
+            if spx <= REG_FINE_STEP_PX && sdg <= REG_FINE_STEP_DEG { break; }
+        }
+    }
+
+    let best_top = warp_mask(ref_mask, bdx, bdy, bda, ref_cx, ref_cy)?;
+    let top_area = core::count_non_zero(&best_top)? as f32;
+
+    let (fit_iou, iou_threshold) = if use_residual_cost {
+        let mut inter_tr = Mat::default();
+        core::bitwise_and(&best_top, &residual, &mut inter_tr, &core::no_array())?;
+        let inter_px = core::count_non_zero(&inter_tr)? as f32;
+        let res_a = residual_area as f32;
+        let recall = if res_a > 0.0 { inter_px / res_a } else { 0.0 };
+        let mut not_obs_p = Mat::default();
+        core::bitwise_not(mask_obs, &mut not_obs_p, &core::no_array())?;
+        let mut top_out_p = Mat::default();
+        core::bitwise_and(&best_top, &not_obs_p, &mut top_out_p, &core::no_array())?;
+        let halluc_px = core::count_non_zero(&top_out_p)? as f32;
+        let precision = if top_area > 0.0 { 1.0 - (halluc_px / top_area).min(1.0) } else { 0.0 };
+        let f1 = if (precision + recall) > 0.0 {
+            2.0 * precision * recall / (precision + recall)
+        } else { 0.0 };
+        (f1, REG_MIN_IOU)
+    } else {
+        let mut inter = Mat::default();
+        core::bitwise_and(&best_top, mask_obs, &mut inter, &core::no_array())?;
+        let ia = core::count_non_zero(&inter)? as f32;
+        let coverage = if top_area > 0.0 { ia / top_area } else { 0.0 };
+        (coverage, 0.70)
+    };
+
+    let top_spine = spine_from_mask(&best_top, rs.spine_vec, off)?
+        .unwrap_or_else(|| {
+            let tcx = ref_cx + bdx; let tcy = ref_cy + bdy;
+            let dr = bda.to_radians();
+            let (c, s) = (dr.cos(), dr.sin());
+            let svx = rs.spine_vec.x*c - rs.spine_vec.y*s;
+            let svy = rs.spine_vec.x*s + rs.spine_vec.y*c;
+            let svl = (svx*svx+svy*svy).sqrt().max(1e-6);
+            let sv  = Point2f::new(svx/svl, svy/svl);
+            let h   = rs.length_px / 2.0;
+            let cg  = Point2f::new(tcx+off.x, tcy+off.y);
+            let tg  = Point2f::new(cg.x+sv.x*h, cg.y+sv.y*h);
+            let a360 = angle360_from_center_tip(cg, tg);
+            InsoleSpine {
+                center: cg, tip: tg,
+                heel: Point2f::new(cg.x-sv.x*h, cg.y-sv.y*h),
+                spine_vec: sv, angle360: a360, length_px: rs.length_px,
+            }
+        });
+
+    let top_angle_delta = delta_angle_signed(rs.angle360, top_spine.angle360);
+    let top_delta_x     = top_spine.center.x - rs.center.x;
+    let top_delta_y     = top_spine.center.y - rs.center.y;
+    let top_offset_px   = (top_delta_x*top_delta_x + top_delta_y*top_delta_y).sqrt();
+    let valid           = fit_iou >= iou_threshold;
+
+    // ── Cập nhật warm-start cho frame KẾ TIẾP ──
+    // Khớp tốt -> lưu lại vị trí để frame sau bỏ qua quét thô.
+    // Khớp hỏng (mất dấu / lót đổi hẳn vị trí) -> reset, frame sau quét
+    // lại từ đầu như bình thường, tránh bị "kẹt" ở vị trí sai.
+    if valid {
+        warm.active = true;
+        warm.dx = bdx; warm.dy = bdy; warm.da = bda;
+    } else {
+        warm.reset();
+    }
+    let top_flipped     = valid && top_angle_delta.abs() > FLIP_ANGLE_DEG;
+
+    let stack_state = match (top_offset_px > STACK_OFFSET_CONFIRM_PX,
+                             top_angle_delta.abs() > STACK_ROTATION_CONFIRM) {
+        (false, false) => STACK_ALIGNED,
+        (true,  false) => STACK_OFFSET,
+        (false, true)  => STACK_ROTATED,
+        (true,  true)  => STACK_COMPLEX,
+    };
+
+    Ok(StackedAnalysis {
+        top_spine, top_angle360: top_spine.angle360,
+        top_angle_delta, top_delta_x, top_delta_y, top_offset_px,
+        fit_iou, residual_area, valid, top_flipped, stack_state,
+    })
+}
+
+// ================================================================
+// detect_robot_intrusion() đã xóa — thay bằng M111 PLC sync (M_ROBOT_IN_CAM)
+
+
+fn compute_shoe(
+    mask:       &Mat,
+    contour:    &core::Vector<Point>,
+    roi_offset: Point,
+    rs:         &RefSpine,
+    ref_mask:   &Mat,
+) -> Result<Option<ShoeSpine>> {
+    let area = imgproc::contour_area(contour, false)?;
+    if area < MIN_SHOE_AREA { return Ok(None); }
+
+    let mut hi: core::Vector<i32> = core::Vector::new();
+    imgproc::convex_hull(contour, &mut hi, false, false)?;
+    let mut hp: core::Vector<Point> = core::Vector::new();
+    for i in 0..hi.len() { hp.push(contour.get(hi.get(i)? as usize)?); }
+    let hull_area = imgproc::contour_area(&hp, false)?;
+    let solidity  = if hull_area > 0.0 { (area/hull_area) as f32 } else { 1.0 };
+
+    let area_ratio = (area / rs.area) as f32;
+
+    let off2f = Point2f::new(roi_offset.x as f32, roi_offset.y as f32);
+
+    // ── Ước lượng góc/tâm SƠ BỘ của vật thể (tính TRƯỚC, dùng chung) ──
+    // Bắt buộc phải làm bước này TRƯỚC khi so outside_ratio với ref_mask,
+    // vì lót giày trong thực tế luôn được gắp ở các góc xoay khác nhau
+    // (đó chính là lý do có "GÓC LỆCH" để robot bù trừ). Nếu so trực
+    // tiếp mask hiện tại (đã xoay lệch) với ref_mask (chụp cố định ở 1
+    // góc) mà KHÔNG xoay ref_mask theo góc quan sát trước, phần lớn
+    // diện tích vật thể sẽ luôn rơi "ngoài" ref_mask chỉ vì khác góc —
+    // hoàn toàn không liên quan gì tới có chồng lót hay không — gây báo
+    // giả "2-PHỨC" cho MỌI lót đơn bị xoay lệch nhiều (ví dụ -15.7°).
+    let pre_spine = spine_from_mask(mask, rs.spine_vec, off2f)?;
+    let (pre_angle360, pre_cx, pre_cy) = match &pre_spine {
+        Some(s) => (s.angle360, s.center.x, s.center.y),
+        None    => (rs.angle360, rs.center.x, rs.center.y),
+    };
+    let pre_delta_angle = delta_angle_signed(rs.angle360, pre_angle360);
+    let pre_dx = pre_cx - rs.center.x;
+    let pre_dy = pre_cy - rs.center.y;
+
+    let outside_ratio = if ref_mask.rows() == mask.rows() && ref_mask.cols() == mask.cols() {
+        // Xoay + dịch ref_mask theo đúng góc/tâm quan sát được của vật thể
+        // hiện tại trước khi so sánh — để "outside" chỉ còn phản ánh phần
+        // dư THẬT (chồng lót), không phải sai lệch do góc xoay bình thường.
+        //
+        // Thử CẢ HAI chiều xoay (+góc và -góc): quy ước dấu góc của
+        // warp_mask() không được đảm bảo khớp 100% với delta_angle_signed()
+        // dùng ở chỗ khác trong file — lấy chiều nào cho outside_ratio thấp
+        // hơn (khớp mask tốt hơn) mới là chiều đúng, tránh trường hợp lỡ
+        // xoay sai chiều làm outside_ratio còn tệ hơn ban đầu.
+        let ref_cx_local = rs.center.x - off2f.x;
+        let ref_cy_local = rs.center.y - off2f.y;
+
+        let compute_outside = |ang: f32| -> Result<f32> {
+            let ref_aligned = warp_mask(ref_mask, pre_dx, pre_dy, ang,
+                ref_cx_local, ref_cy_local)?;
+            let mut not_ref = Mat::default();
+            core::bitwise_not(&ref_aligned, &mut not_ref, &core::no_array())?;
+            let mut outside = Mat::default();
+            core::bitwise_and(mask, &not_ref, &mut outside, &core::no_array())?;
+            let outside_px = core::count_non_zero(&outside)? as f32;
+            Ok(if area > 0.0 { outside_px / area as f32 } else { 0.0 })
+        };
+
+        let or_pos = compute_outside(pre_delta_angle)?;
+        let or_neg = compute_outside(-pre_delta_angle)?;
+        or_pos.min(or_neg)
+    } else { 0.0 };
+
+    // ── Solidity tương đối so với mẫu (không dùng ngưỡng tuyệt đối 0.84) ──
+    // Hình dạng lót tự nhiên (thắt eo, mũi nhọn) đã có solidity thấp sẵn dù
+    // chỉ có 1 lót — so với chính solidity của mẫu mới phản ánh đúng "có
+    // thêm méo mó bất thường" hay không.
+    let solidity_drop = rs.solidity - solidity; // dương = méo hơn mẫu
+
+    // ── Kết hợp AND: cần CẢ hình dạng méo hơn mẫu rõ rệt VÀ có vùng dư
+    // thật ngoài ref_mask — giảm nhận nhầm lót đơn (vốn solidity tự nhiên
+    // đã thấp) thành stacked khi không có gì chồng lên thật.
+    let geom_suspect    = solidity_drop > STACKED_SOLIDITY_DROP;
+    let outside_suspect = outside_ratio > OUTSIDE_RATIO_STACKED;
+    let stacked_by_diff = geom_suspect && outside_suspect && area_ratio > 1.08;
+
+    // Diện tích vượt giới hạn vật lý hoặc lớn hơn hẳn mẫu vẫn là tiêu chí
+    // độc lập đáng tin cậy — 1 lót đơn không thể tự nhiên đạt mức này.
+    let stacked = area > MAX_SHOE_AREA * STACKED_AREA_FACTOR
+        || area_ratio > STACKED_AREA_RATIO_MIN
+        || stacked_by_diff;
+
+    let bottom_spine = if !stacked {
+        pre_spine.clone().unwrap_or_else(|| InsoleSpine {
+            center: rs.center, tip: rs.tip, heel: rs.heel,
+            spine_vec: rs.spine_vec, angle360: rs.angle360, length_px: rs.length_px,
+        })
+    } else {
+        InsoleSpine {
+            center: rs.center, tip: rs.tip, heel: rs.heel,
+            spine_vec: rs.spine_vec, angle360: rs.angle360, length_px: rs.length_px,
+        }
+    };
+
+    let (blob_cx, blob_cy) = if !stacked {
+        (pre_cx, pre_cy)
+    } else {
+        let m = imgproc::moments(mask, true)?;
+        if m.m00 > 0.0 {
+            ((m.m10/m.m00) as f32 + off2f.x, (m.m01/m.m00) as f32 + off2f.y)
+        } else { (rs.center.x, rs.center.y) }
+    };
+    let delta_cx = blob_cx - rs.center.x;
+    let delta_cy = blob_cy - rs.center.y;
+
+    let (_obs_angle360, delta_angle, flipped) = if !stacked {
+        let fl = pre_delta_angle.abs() > FLIP_ANGLE_DEG;
+        (pre_angle360, pre_delta_angle, fl)
+    } else {
+        // Dùng spine_from_mask_width_vote (width vote) để xác định hướng lót
+        // khi stacked — giống cách tính mẫu reference, nhất quán với ref
+        match spine_from_mask_width_vote(mask, contour, off2f)? {
+            Some(s) if s.length_px > 0.0 => {
+                let da = delta_angle_signed(rs.angle360, s.angle360);
+                let fl = da.abs() > FLIP_ANGLE_DEG;
+                (s.angle360, da, fl)
+            }
+            _ => (rs.angle360, 0.0f32, false),
+        }
+    };
+
+    let mut dmg: u8 = 0;
+    if area_ratio < DAMAGE_AREA_RATIO_MIN || area_ratio > DAMAGE_AREA_RATIO_MAX { dmg |= 0b001; }
+    if solidity < DAMAGE_SOLIDITY_MIN && !stacked { dmg |= 0b010; }
+
+    Ok(Some(ShoeSpine {
+        bottom_spine, stacked_info: None,
+        area, solidity, stacked,
+        delta_angle, delta_cx, delta_cy,
+        flipped, damage_flags: dmg, outside_ratio,
+    }))
+}
+
+fn compute_ref_spine(ref_img: &Mat, roi: &Rect, klg: &Mat, ksm: &Mat) -> Result<Option<(RefSpine, Mat)>> {
+    let mask = segment_shoe(ref_img, klg, ksm)?;
+    let mut contours: core::Vector<core::Vector<Point>> = core::Vector::new();
+    imgproc::find_contours(&mask, &mut contours,
+        RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point::new(0,0))?;
+    let mut best: Option<core::Vector<Point>> = None;
+    let mut ba = 0f64;
+    for i in 0..contours.len() {
+        let c = contours.get(i)?;
+        let a = imgproc::contour_area(&c, false)?;
+        if a > ba && a >= MIN_SHOE_AREA { ba = a; best = Some(c); }
+    }
+    let contour = match best {
+        Some(c) => c,
+        None => { println!("[REF] Không có lót"); return Ok(None); }
+    };
+    let off = Point2f::new(roi.x as f32, roi.y as f32);
+
+    // Tính solidity của mẫu — dùng để so sánh tương đối khi xét stacked
+    let mut hi: core::Vector<i32> = core::Vector::new();
+    imgproc::convex_hull(&contour, &mut hi, false, false)?;
+    let mut hp: core::Vector<Point> = core::Vector::new();
+    for i in 0..hi.len() { hp.push(contour.get(hi.get(i)? as usize)?); }
+    let hull_area = imgproc::contour_area(&hp, false)?;
+    let ref_solidity = if hull_area > 0.0 { (ba/hull_area) as f32 } else { 1.0 };
+
+    let spine_opt = spine_from_mask_width_vote(&mask, &contour, off)?;
+    Ok(spine_opt.map(|s| {
+        println!(
+            "[REF] tip=({:.0},{:.0}) heel=({:.0},{:.0}) ang360={:.1}deg len={:.1}px area={:.0} solidity={:.3}",
+            s.tip.x, s.tip.y, s.heel.x, s.heel.y, s.angle360, s.length_px, ba, ref_solidity
+        );
+        let rs = RefSpine {
+            angle360: s.angle360, center: s.center, tip: s.tip, heel: s.heel,
+            length_px: s.length_px, area: ba, spine_vec: s.spine_vec,
+            solidity: ref_solidity,
+        };
+        (rs, mask)
+    }))
+}
+
+// ================================================================
+//  DRAW — vẽ spine/contour lên camera frame
+// ================================================================
+fn draw_vision_only(
+    frame:      &mut Mat,
+    sm:         &SpineSmooth,
+    spine:      &ShoeSpine,
+    contour:    &core::Vector<Point>,
+    roi_offset: Point,
+    rs:         &RefSpine,
+    roi:        Rect,
+) -> Result<()> {
+    let yellow = Scalar::new(0.0, 215.0, 255.0, 0.0);
+    let green  = Scalar::new(0.0, 220.0,  80.0, 0.0);
+    let red    = Scalar::new(30.0, 40.0, 230.0, 0.0);
+    let orange = Scalar::new(0.0, 140.0, 255.0, 0.0);
+    let white  = Scalar::new(240.0,240.0,240.0, 0.0);
+    let lime   = Scalar::new(0.0, 255.0,  60.0, 0.0);
+    let gray   = Scalar::new(140.0,140.0,140.0, 0.0);
+    let sky    = Scalar::new(255.0,200.0,  50.0, 0.0);
+    let mint   = Scalar::new(180.0,255.0, 150.0, 0.0);
+    let purple = Scalar::new(200.0, 50.0, 150.0, 0.0);
+    let violet = Scalar::new(255.0,100.0, 200.0, 0.0);
+
+    let mut cg: core::Vector<Point> = core::Vector::new();
+    for i in 0..contour.len() {
+        let p = contour.get(i)?;
+        cg.push(Point::new(p.x + roi_offset.x, p.y + roi_offset.y));
+    }
+    imgproc::draw_contours(frame,
+        &core::Vector::<core::Vector<Point>>::from_iter(std::iter::once(cg)),
+        0, lime, 2, imgproc::LINE_AA, &core::no_array(), i32::MAX, Point::new(0,0))?;
+
+    let (bcx,bcy) = (sm.center.x as i32, sm.center.y as i32);
+    let (btx,bty) = (sm.tip.x    as i32, sm.tip.y    as i32);
+    let (bhx,bhy) = (sm.heel.x   as i32, sm.heel.y   as i32);
+    imgproc::line(frame, Point::new(bhx,bhy), Point::new(btx,bty), yellow, 2, imgproc::LINE_AA, 0)?;
+    imgproc::circle(frame, Point::new(bcx,bcy), 9, green, -1, imgproc::LINE_AA, 0)?;
+    imgproc::circle(frame, Point::new(bcx,bcy), 9, white,  1, imgproc::LINE_AA, 0)?;
+    let (rx, ry, rr, rin) = robot_debug_for_point(sm.center.x, sm.center.y, roi);
+    imgproc::put_text(frame,
+        &format!("Robot X:{rx:.1} Y:{ry:.1} D:{rr:.1}mm {}", if rin {"IN"} else {"OUT"}),
+        Point::new(bcx + 12, bcy + 22),
+        imgproc::FONT_HERSHEY_SIMPLEX, 0.48,
+        if rin { green } else { red },
+        1, imgproc::LINE_AA, false)?;
+    imgproc::circle(frame, Point::new(btx,bty), 7, red,   -1, imgproc::LINE_AA, 0)?;
+    imgproc::put_text(frame, "T", Point::new(btx+10,bty-6),
+        imgproc::FONT_HERSHEY_SIMPLEX, 0.6, red, 2, imgproc::LINE_AA, false)?;
+    imgproc::circle(frame, Point::new(bhx,bhy), 7, orange,-1, imgproc::LINE_AA, 0)?;
+    imgproc::put_text(frame, "H", Point::new(bhx+10,bhy-6),
+        imgproc::FONT_HERSHEY_SIMPLEX, 0.6, orange, 2, imgproc::LINE_AA, false)?;
+
+    imgproc::line(frame,
+        Point::new(rs.heel.x as i32, rs.heel.y as i32),
+        Point::new(rs.tip.x  as i32, rs.tip.y  as i32),
+        gray, 1, imgproc::LINE_AA, 0)?;
+    imgproc::circle(frame, Point::new(rs.center.x as i32, rs.center.y as i32),
+        5, gray, 1, imgproc::LINE_AA, 0)?;
+
+    if let Some(si) = &spine.stacked_info {
+        if si.valid {
+            let ts = &si.top_spine;
+            let (tcx,tcy) = (ts.center.x as i32, ts.center.y as i32);
+            let (ttx,tty) = (ts.tip.x    as i32, ts.tip.y    as i32);
+            let (thx,thy) = (ts.heel.x   as i32, ts.heel.y   as i32);
+            imgproc::line(frame, Point::new(bcx,bcy), Point::new(tcx,tcy),
+                violet, 1, imgproc::LINE_AA, 0)?;
+            imgproc::line(frame, Point::new(thx,thy), Point::new(ttx,tty),
+                sky, 2, imgproc::LINE_AA, 0)?;
+            imgproc::circle(frame, Point::new(tcx,tcy), 9, purple,-1, imgproc::LINE_AA, 0)?;
+            imgproc::circle(frame, Point::new(tcx,tcy), 9, white,  1, imgproc::LINE_AA, 0)?;
+            imgproc::circle(frame, Point::new(ttx,tty), 7, sky,   -1, imgproc::LINE_AA, 0)?;
+            imgproc::put_text(frame, "T2", Point::new(ttx+10,tty-6),
+                imgproc::FONT_HERSHEY_SIMPLEX, 0.6, sky, 2, imgproc::LINE_AA, false)?;
+            imgproc::circle(frame, Point::new(thx,thy), 7, mint,  -1, imgproc::LINE_AA, 0)?;
+            imgproc::put_text(frame, "H2", Point::new(thx+10,thy-6),
+                imgproc::FONT_HERSHEY_SIMPLEX, 0.6, mint, 2, imgproc::LINE_AA, false)?;
+
+            // ── Tọa độ robot riêng của LÓT TRÊN (tránh nhầm với lót dưới) ──
+            let (trx, try_, trr, trin) = robot_debug_for_point(ts.center.x, ts.center.y, roi);
+            imgproc::put_text(frame,
+                &format!("Robot(TOP) X:{trx:.1} Y:{try_:.1} D:{trr:.1}mm {}",
+                    if trin {"IN"} else {"OUT"}),
+                Point::new(tcx + 12, tcy - 14),
+                imgproc::FONT_HERSHEY_SIMPLEX, 0.48,
+                if trin { purple } else { red },
+                1, imgproc::LINE_AA, false)?;
+        }
+    }
+    Ok(())
+}
+
+// ================================================================
+//  ROI HELPERS
+// ================================================================
+fn full_frame_roi(fw: i32, fh: i32) -> Option<Rect> {
+    if fw > ROI_MIN_SIZE_PX && fh > ROI_MIN_SIZE_PX {
+        Some(Rect::new(0, 0, fw, fh))
+    } else {
+        None
+    }
+}
+
+fn save_roi(roi: &Rect) {
+    std::fs::write(ROI_FILE,
+        format!("{} {} {} {}", roi.x, roi.y, roi.width, roi.height)).ok();
+}
+
+fn load_roi() -> Option<Rect> {
+    let s = std::fs::read_to_string(ROI_FILE).ok()?;
+    let v: Vec<i32> = s.split_whitespace()
+        .filter_map(|x| x.parse().ok()).collect();
+    if v.len()==4 { Some(Rect::new(v[0],v[1],v[2],v[3])) } else { None }
+}
+
+fn load_reference() -> Option<Mat> {
+    let img = imgcodecs::imread(REFERENCE_FILE, imgcodecs::IMREAD_COLOR).ok()?;
+    if img.empty() { None } else { Some(img) }
+}
+
+fn load_ref_mask() -> Option<Mat> {
+    let img = imgcodecs::imread(REF_MASK_FILE, imgcodecs::IMREAD_GRAYSCALE).ok()?;
+    if img.empty() { None } else { Some(img) }
+}
+
+// ================================================================
+//  FLUSH CAMERA BUFFER — đọc bỏ tất cả frame cũ đang tồn đọng
+//  Gọi sau mỗi lần xử lý nặng (analyze_stacked) để luôn lấy
+//  frame mới nhất, tránh hiện tượng trễ ảnh vài giây.
+// ================================================================
+fn cam_flush(cam: &mut videoio::VideoCapture) {
+    let mut tmp = Mat::default();
+    // Đọc tối đa 10 frame liên tiếp không blocking
+    // OpenCV backend thường buffer 4–8 frame
+    for _ in 0..10 {
+        let _ = cam.grab();
+    }
+    let _ = cam.retrieve(&mut tmp, 0);
+}
+
+// ================================================================
+//  MAIN
+// ================================================================
+fn main() -> Result<()> {
+    println!("╔══════════════════════════════════════════════════════════╗");
+    println!("║  Shoe Stack Vision v13 — PC Slave thuần túy             ║");
+    println!("║  PLC chủ động TẤT CẢ: đọc tọa độ + ghi robot status    ║");
+    println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║  PC hỗ trợ:                                             ║");
+    println!("║   FC03 — PLC đọc D register  (tọa độ lót)              ║");
+    println!("║   FC16 — PLC ghi D register  (robot status)            ║");
+    println!("║   FC01 — PLC đọc M coil                                 ║");
+    println!("║   FC05 — PLC ghi M coil      (I/O flags)               ║");
+    println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║  Vision data: D{D_LOT_START}..D{:<4} | Robot: D{D_ROBOT_START}..D{:<4}       ║",
+        D_LOT_START + D_LOT_COUNT - 1, D_ROBOT_START + D_ROBOT_COUNT - 1);
+    println!("║  M coil:      M{M_IO_START}..M{:<4}                              ║",
+        M_IO_START + M_IO_COUNT - 1);
+    println!("╚══════════════════════════════════════════════════════════╝");
+    println!("  IPC GUI: {IPC_BIND}");
+    println!("  Phím (cửa sổ OpenCV, tùy chọn): [D] ROI  [S] mẫu  [R] load  [P] TCP  [Q] thoát");
+    println!("  Hoặc điều khiển 100% từ gui.py — không cần cửa sổ này.\n");
+
+    let shared  = AppShared::new();
+    let running = Arc::new(AtomicBool::new(true));
+
+    let klg = imgproc::get_structuring_element(imgproc::MORPH_ELLIPSE, Size::new(13,13), Point::new(-1,-1))?;
+    let ksm = imgproc::get_structuring_element(imgproc::MORPH_ELLIPSE, Size::new(7,7),  Point::new(-1,-1))?;
+
+    // Spawn threads
+    { let s=Arc::clone(&shared); let r=Arc::clone(&running);
+      std::thread::spawn(move || pc_slave_server(s,r)); }
+    { let s=Arc::clone(&shared); let r=Arc::clone(&running);
+      std::thread::spawn(move || ipc_server_thread(s,r)); }
+
+    // JPEG encoder thread — tách encode ra khỏi luồng tracking
+    // bound=2: luồng chính không bị block nếu encoder còn bận
+    let (jpeg_tx, jpeg_rx): (SyncSender<Mat>, _) = sync_channel(2);
+    { let s=Arc::clone(&shared); let r=Arc::clone(&running);
+      std::thread::spawn(move || jpeg_encoder_thread(s,r,jpeg_rx)); }
+
+    // Camera + Window
+    let mut cam = videoio::VideoCapture::new(CAM_ID, videoio::CAP_ANY)?;
+    if !cam.is_opened()? { eprintln!("Không mở được camera"); return Ok(()); }
+    if SHOW_WINDOW {
+        highgui::named_window(WINDOW, highgui::WINDOW_NORMAL)?;
+        highgui::resize_window(WINDOW, DISPLAY_W, DISPLAY_H)?;
+    }
+
+    // ── Log resolution camera thật — in 1 lần, nổi bật, để đối chiếu calibrate ──
+    {
+        let mut test_frame = Mat::default();
+        cam.read(&mut test_frame)?;
+        if !test_frame.empty() {
+            println!("=================================================");
+            println!("[CAMERA] Resolution thật: {} x {} (width x height px)", test_frame.cols(), test_frame.rows());
+            println!("[CAMERA] mm/px theo X (ROI_REAL_WIDTH_MM/{}) = {:.4}", test_frame.cols(), ROI_REAL_WIDTH_MM / test_frame.cols() as f32);
+            println!("[CAMERA] mm/px theo Y (ROI_REAL_HEIGHT_MM/{}) = {:.4}", test_frame.rows(), ROI_REAL_HEIGHT_MM / test_frame.rows() as f32);
+            println!("=================================================");
+        }
+    }
+
+    let mut frame        = Mat::default();
+    let mut roi_opt:Option<Rect> = load_roi();
+    let mut stab         = Stabilizer::default();
+    let mut smooth       = SpineSmooth::default();
+    let mut top_smooth   = TopAngleSmooth::default();
+    let mut stack_warm   = RegSeedState::default();
+    let mut cached_rm:Option<(i32,i32,Mat)> = None;
+    let mut last_good    = VisionFrame::default();
+
+    let mut app_state = match load_reference() {
+        Some(r) => match roi_opt.as_ref()
+            .and_then(|roi| compute_ref_spine(&r,roi,&klg,&ksm).ok().flatten())
+        {
+            Some((rs,mask)) => {
+                if load_ref_mask().is_none() {
+                    imgcodecs::imwrite(REF_MASK_FILE,&mask,&core::Vector::<i32>::new()).ok();
+                }
+                AppState::Tracking{_reference:r,ref_spine:rs,ref_mask:mask}
+            }
+            None => AppState::NoReference,
+        },
+        None => AppState::NoReference,
+    };
+
+    // ── Main loop ─────────────────────────────────────────────────
+    loop {
+        cam.read(&mut frame)?;
+        if frame.empty() { continue; }
+        let fw = frame.cols(); let fh = frame.rows();
+        // ── Gom phím bàn phím cục bộ (cửa sổ OpenCV) + lệnh remote từ GUI ──
+        // gui.py gửi "CMD:s\n" v.v. qua IPC :5556, được ipc_read_commands()
+        // đẩy vào shared.remote_cmd. Xử lý chung 1 chỗ để 2 nguồn tương
+        // đương nhau — thao tác 100% trên GUI mà không cần cửa sổ OpenCV.
+        let local_key = if SHOW_WINDOW {
+            highgui::wait_key(1)?
+        } else {
+            // Không có cửa sổ nào để wait_key() chờ sự kiện -> tự sleep
+            // 1 nhịp nhỏ để không ăn 100% CPU khi vòng lặp chỉ còn chờ
+            // lệnh remote từ GUI qua shared.remote_cmd.
+            std::thread::sleep(Duration::from_millis(1));
+            -1
+        };
+        let mut pending_keys: Vec<i32> = Vec::new();
+        if local_key >= 0 { pending_keys.push(local_key); }
+        {
+            let mut q = shared.remote_cmd.lock().unwrap();
+            while let Some(b) = q.pop_front() { pending_keys.push(b as i32); }
+        }
+
+        let mut quit = false;
+        for key in pending_keys {
+            if key == b'q' as i32 {
+                println!("Thoát...");
+                quit = true;
+                break;
+            }
+            if key == b'd' as i32 {
+                if let Some(r) = full_frame_roi(fw, fh) {
+                    save_roi(&r);
+                    roi_opt = Some(r);
+                    app_state = AppState::NoReference;
+                    stab = Stabilizer::default();
+                    smooth.reset();
+                    top_smooth.reset();
+                    stack_warm.reset();
+                    cached_rm = None;
+                    println!("[ROI] Full frame: x={} y={} w={} h={}", r.x, r.y, r.width, r.height);
+                } else {
+                    println!("[ROI] Frame qua nho, chua the xac dinh vung lam viec.");
+                }
+            }
+            if key == b's' as i32 { match roi_opt {
+                None => println!("Can bam [D] de xac dinh vung lam viec truoc!"),
+                Some(roi) => {
+                    let acc=Mat::zeros(roi.height,roi.width,core::CV_32FC3)?.to_mat()?;
+                    app_state=AppState::Capturing{count:0,acc};
+                    stab=Stabilizer::default(); smooth.reset(); top_smooth.reset(); stack_warm.reset(); cached_rm=None;
+                    println!("[CAPTURE] Bắt đầu chụp {CAPTURE_FRAMES} khung ảnh mẫu...");
+                }
+            }}
+            if key == b'r' as i32 { if let Some(r)=load_reference() {
+                if let Some((rs,mask))=roi_opt.as_ref()
+                    .and_then(|roi| compute_ref_spine(&r,roi,&klg,&ksm).ok().flatten())
+                {
+                    imgcodecs::imwrite(REF_MASK_FILE,&mask,&core::Vector::<i32>::new()).ok();
+                    app_state=AppState::Tracking{_reference:r,ref_spine:rs,ref_mask:mask};
+                    stab=Stabilizer::default(); smooth.reset(); top_smooth.reset(); stack_warm.reset(); cached_rm=None;
+                    println!("[RELOAD] Đã load lại mẫu từ file.");
+                }
+            }}
+            if key == b'p' as i32 {
+                let cur = shared.tcp_enabled.load(Ordering::Relaxed);
+                shared.tcp_enabled.store(!cur, Ordering::Relaxed);
+                println!("[TCP] {}", if !cur {"BẬT"} else {"TẮT"});
+            }
+        }
+        if quit { break; }
+
+        let mut display = frame.clone();
+        if let Some(roi) = roi_opt {
+            imgproc::rectangle(&mut display, roi,
+                Scalar::new(0.0,255.0,255.0,0.0), 2, imgproc::LINE_AA, 0)?;
+        }
+        if let Some(roi) = roi_opt {
+            imgproc::draw_marker(&mut display,
+                Point::new(roi.x + roi.width / 2, roi.y + roi.height / 2),
+                Scalar::new(255.0, 180.0, 40.0, 0.0),
+                imgproc::MARKER_CROSS, 18, 1, imgproc::LINE_AA)?;
+        }
+
+        // Status bar (minimal — GUI hiển thị chi tiết)
+        let n_tcp = shared.tcp_clients.load(Ordering::Relaxed);
+        let n_ipc = shared.ipc_clients.load(Ordering::Relaxed);
+        let d_ref = shared.slave_d.lock().unwrap();
+        let rs_idx = D_ROBOT_START as usize;
+        let robot_st = match d_ref[rs_idx] {
+            0=>"IDLE", 1=>"MOVE", 2=>"GRIP", 3=>"HOME", 4=>"ERR", _=>"?"
+        };
+        drop(d_ref);
+        imgproc::put_text(&mut display,
+            &format!("TCP:{n_tcp} IPC:{n_ipc} ROBOT:{robot_st}"),
+            Point::new(fw-260, 22), imgproc::FONT_HERSHEY_SIMPLEX, 0.48,
+            Scalar::new(0.0,220.0,80.0,0.0),
+            1, imgproc::LINE_AA, false)?;
+
+        match &mut app_state {
+            AppState::Capturing{count,acc} => {
+                let roi = roi_opt.unwrap();
+                let crop = Mat::roi(&frame,roi)?;
+                let mut cf32=Mat::default();
+                crop.convert_to(&mut cf32,core::CV_32FC3,1.0,0.0)?;
+                let mut tmp=Mat::default();
+                core::add(acc,&cf32,&mut tmp,&core::no_array(),-1)?;
+                *acc=tmp; *count+=1;
+                imgproc::put_text(&mut display,
+                    &format!("Chụp mẫu {}/{CAPTURE_FRAMES}",count),
+                    Point::new(12,36),imgproc::FONT_HERSHEY_SIMPLEX,0.7,
+                    Scalar::new(0.0,215.0,255.0,0.0),2,imgproc::LINE_AA,false)?;
+                if *count >= CAPTURE_FRAMES {
+                    let mut af32=Mat::default();
+                    core::multiply(acc,&Scalar::all(1.0/ *count as f64),&mut af32,1.0,-1)?;
+                    let mut au8=Mat::default();
+                    af32.convert_to(&mut au8,core::CV_8UC3,1.0,0.0)?;
+                    imgcodecs::imwrite(REFERENCE_FILE,&au8,&core::Vector::<i32>::new())?;
+                    match compute_ref_spine(&au8,&roi_opt.unwrap(),&klg,&ksm).ok().flatten() {
+                        Some((rs,mask)) => {
+                            imgcodecs::imwrite(REF_MASK_FILE,&mask,&core::Vector::<i32>::new()).ok();
+                            cached_rm=None;
+                            app_state=AppState::Tracking{_reference:au8,ref_spine:rs,ref_mask:mask};
+                        }
+                        None => { app_state=AppState::NoReference; }
+                    }
+                }
+            }
+
+            AppState::Tracking{ref_spine,ref_mask,..} => {
+                let roi = match roi_opt {
+                    Some(r) => r,
+                    None => {
+                        imgproc::put_text(&mut display,"Bam [D] xac dinh ROI full-frame!",Point::new(12,36),
+                            imgproc::FONT_HERSHEY_SIMPLEX,0.7,Scalar::new(0.0,215.0,255.0,0.0),2,imgproc::LINE_AA,false)?;
+                        show_frame(&display)?;
+                        jpeg_tx.try_send(display.clone()).ok();
+                        continue;
+                    }
+                };
+
+                // ── M111: PLC báo tay gắp đang trong vùng camera → skip toàn bộ xử lý ──
+                // PLC ghi M111=1 ngay khi bắt đầu hành trình đến vị trí lấy phôi,
+                // xóa về 0 sau khi robot đã rút ra hoàn toàn khỏi vùng camera.
+                // Không cần xử lý ảnh gì cả — freeze last_good, hiện [ROBOT] trên màn hình.
+                if shared.slave_m.lock().unwrap()[M_ROBOT_IN_CAM as usize] {
+                    let mut vd = shared.vision.lock().unwrap();
+                    *vd = last_good.clone();
+                    vd.frozen  = true;
+                    vd.data_ok = false;
+                    drop(vd);
+                    imgproc::put_text(&mut display, "[ROBOT]", Point::new(12, 36),
+                        imgproc::FONT_HERSHEY_SIMPLEX, 0.9,
+                        Scalar::new(0.0, 165.0, 255.0, 0.0), 2, imgproc::LINE_AA, false)?;
+                    show_frame(&display)?;
+                    jpeg_tx.try_send(display.clone()).ok();
+                    continue;
+                }
+
+                let crop  = Mat::roi(&frame,roi)?.try_clone()?;
+                let clean = match segment_shoe(&crop,&klg,&ksm) {
+                    Ok(m) => m,
+                    Err(e) => { eprintln!("seg:{e:?}"); continue; }
+                };
+
+                // ── Kiểm tra không có lót: tổng pixel trắng < 50% ref_area ──
+                // Khi ảnh toàn tối, Otsu vẫn tạo mask giả — lọc thêm bằng độ
+                // sáng trung bình của ROI (nền đen thật sẽ có mean gray rất thấp,
+                // không đủ để là lót/vật thể có ánh sáng phản chiếu).
+                let mut gray = Mat::default();
+                imgproc::cvt_color(&crop, &mut gray, imgproc::COLOR_BGR2GRAY, 0,
+                    core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
+                let mean_gray = core::mean(&gray, &core::no_array())?.0[0] as f32;
+                let white_px = core::count_non_zero(&clean)? as f64;
+                let has_insole_candidate = white_px >= ref_spine.area * 0.5
+                    && mean_gray >= ROI_MIN_MEAN_GRAY;
+
+                let mut contours:core::Vector<core::Vector<Point>>=core::Vector::new();
+                imgproc::find_contours(&clean,&mut contours,
+                    RETR_EXTERNAL,CHAIN_APPROX_SIMPLE,Point::new(0,0))?;
+                let mut shoe_c:Option<core::Vector<Point>>=None;
+                let mut shoe_a=0f64; let mut foreign=0f64;
+                if has_insole_candidate {
+                    for i in 0..contours.len() {
+                        let c=contours.get(i)?;
+                        let a=imgproc::contour_area(&c,false)?;
+                        if a>=MIN_SHOE_AREA&&a<=MAX_SHOE_AREA*STACKED_AREA_FACTOR*1.5 {
+                            // Lọc theo tỉ lệ diện tích so với mẫu: 0.4x ~ 3.0x
+                            let ratio = a / ref_spine.area;
+                            if ratio >= 0.4 && ratio <= 3.0 {
+                                if a>shoe_a { shoe_a=a; shoe_c=Some(c); }
+                            }
+                        } else if a>=FOREIGN_MIN_AREA&&a<MIN_SHOE_AREA {
+                            foreign+=a;
+                        }
+                    }
+                }
+
+                stab.frozen_count = if foreign>FOREIGN_TOTAL_AREA {
+                    (stab.frozen_count+1).min(FROZEN_CONFIRM_FRAMES+2)
+                } else {
+                    (stab.frozen_count-1).max(0)
+                };
+                stab.confirmed_frozen = stab.frozen_count >= FROZEN_CONFIRM_FRAMES;
+
+                if stab.confirmed_frozen {
+                    // Vật lạ: D lot = 0 (PLC nhận 0)
+                    {
+                        let mut d = shared.slave_d.lock().unwrap();
+                        for i in 0..D_LOT_COUNT as usize { d[D_LOT_START as usize + i] = 0; }
+                    }
+                    shared.slave_m.lock().unwrap()[M_VISION_READY as usize] = false;
+                    shared.slave_m.lock().unwrap()[M_WORKPIECE_DETECT as usize] = false;
+                    let mut vd = shared.vision.lock().unwrap();
+                    *vd = last_good.clone();
+                    vd.frozen    = true;
+                    vd.data_ok   = false;
+                    drop(vd);
+                    imgproc::put_text(&mut display,"[VAT LA]",Point::new(12,36),
+                        imgproc::FONT_HERSHEY_SIMPLEX,0.8,
+                        Scalar::new(30.0,40.0,230.0,0.0),2,imgproc::LINE_AA,false)?;
+                    jpeg_tx.try_send(display.clone()).ok();
+                    show_frame(&display)?;
+                    continue;
+                }
+
+                let rm_for_compute = {
+                    let tw=clean.cols(); let th=clean.rows();
+                    if ref_mask.rows()==th && ref_mask.cols()==tw { ref_mask.clone() }
+                    else { match cached_rm.as_ref() {
+                        Some((cw,ch,m)) if *cw==tw&&*ch==th => m.clone(),
+                        _ => {
+                            let mut rm2=Mat::default();
+                            imgproc::resize(ref_mask,&mut rm2,Size::new(tw,th),
+                                0.0,0.0,imgproc::INTER_NEAREST)?;
+                            cached_rm=Some((tw,th,rm2.clone())); rm2
+                        }
+                    }}
+                };
+
+                if let Some(c) = shoe_c {
+                    let roi_offset = Point::new(roi.x,roi.y);
+                    match compute_shoe(&clean,&c,roi_offset,ref_spine,&rm_for_compute)? {
+                        Some(mut spine) => {
+                            // Chỉ phân tích stacked khi compute_shoe() đã nghi ngờ thật
+                            // (qua tiêu chí AND chặt: solidity tụt + outside_ratio + area_ratio).
+                            // KHÔNG tự mở thêm điều kiện suspect riêng ở đây nữa — làm vậy sẽ
+                            // override quyết định "không stacked" của compute_shoe() bằng một
+                            // ngưỡng khác lỏng hơn (outside_ratio*0.5), gây nhận nhầm lót đơn
+                            // có hình dạng tự nhiên lệch nhẹ thành stacked.
+                            let suspect = spine.stacked;
+                            if suspect {
+                                let t_stacked = Instant::now();
+                                match analyze_stacked_v9(&clean,&rm_for_compute,roi_offset,ref_spine,&mut stack_warm) {
+                                    Ok(si) => {
+                                        let elapsed = t_stacked.elapsed();
+                                        // Nếu analyze mất > 80ms, buffer camera đã tích frame cũ → flush
+                                        if elapsed.as_millis() > 80 {
+                                            cam_flush(&mut cam);
+                                        }
+                                        let conf = si.top_offset_px>STACK_OFFSET_CONFIRM_PX
+                                            || si.top_angle_delta.abs()>STACK_ROTATION_CONFIRM;
+                                        // si.valid (fit_iou đủ cao) LÀ điều kiện cần — nhưng nếu nó
+                                        // valid mà offset/góc quá nhỏ (conf=false), nghĩa là "khớp"
+                                        // được vì chính là lót dưới tự khớp với mẫu, không phải lót
+                                        // trên thật → vẫn coi là không stacked.
+                                        if si.valid && conf { spine.stacked=true; spine.stacked_info=Some(si); }
+                                        else { spine.stacked=false; }
+                                    }
+                                    Err(e) => eprintln!("stacked:{e:?}"),
+                                }
+                            }
+
+                            // ── Xác nhận stacked qua nhiều frame liên tiếp (debounce) ──
+                            // spine.stacked ở trên chỉ là nghi ngờ của 1 FRAME đơn lẻ (có thể
+                            // do rung ảnh/nhiễu segmentation thoáng qua). Chỉ khi nghi ngờ này
+                            // lặp lại liên tục STACKED_CONFIRM_FRAMES frame mới thật sự báo
+                            // "2-PHỨC" ra GUI/PLC — tránh nhấp nháy/báo giả 1-2 frame rồi hết.
+                            stab.stacked_count = if spine.stacked {
+                                (stab.stacked_count + 1).min(STACKED_CONFIRM_FRAMES + 2)
+                            } else {
+                                (stab.stacked_count - 1).max(0)
+                            };
+                            stab.confirmed_stacked = stab.stacked_count >= STACKED_CONFIRM_FRAMES;
+                            if !stab.confirmed_stacked {
+                                spine.stacked = false;
+                                spine.stacked_info = None;
+                            }
+
+                            // Có lót: reset bộ đếm hết lót
+                            stab.no_insole_count = 0;
+                            stab.confirmed_no_insole = false;
+                            smooth.update(&spine);
+
+                            draw_vision_only(&mut display,&smooth,&spine,&c,roi_offset,ref_spine,roi)?;
+
+                            // ── Deadband góc lót TRÊN (top) — chỉ cập nhật khi lệch thật > 1° ──
+                            // Ghi đè ngay vào spine.stacked_info để MỌI nơi dùng si.top_angle360 /
+                            // si.top_angle_delta phía dưới (flags, build_slave_regs, VisionFrame)
+                            // đều tự động nhận giá trị đã lọc, không cần sửa nhiều chỗ khác.
+                            match spine.stacked_info.as_mut() {
+                                Some(s) if s.valid => {
+                                    top_smooth.update(s.top_angle360, s.top_angle_delta);
+                                    s.top_angle360    = top_smooth.out_angle360;
+                                    s.top_angle_delta = top_smooth.out_angle_delta;
+                                }
+                                _ => { top_smooth.reset(); stack_warm.reset(); },
+                            }
+
+                            let si = &spine.stacked_info;
+                            let any_fl = spine.flipped
+                                || si.as_ref().map(|s|s.top_flipped).unwrap_or(false);
+                            let flags:u8 = 0b0001
+                                |((spine.stacked as u8)<<1)
+                                |(si.as_ref().map(|s|s.valid as u8).unwrap_or(0)<<2)
+                                |(si.as_ref().map(|s|(s.top_angle_delta.abs()>STACK_ROTATION_CONFIRM) as u8).unwrap_or(0)<<3)
+                                |((any_fl as u8)<<4)
+                                |(((spine.damage_flags&0b001)>0) as u8)<<5
+                                |(((spine.damage_flags&0b010)>0) as u8)<<6;
+
+                            let target_center = si.as_ref()
+                                .filter(|s| s.valid)
+                                .map(|s| s.top_spine.center)
+                                .unwrap_or(smooth.center);
+                            let (robot_x, robot_y, robot_r, robot_in) =
+                                robot_debug_for_point(target_center.x, target_center.y, roi);
+                            let (robot_dx, robot_dy) = si.as_ref()
+                                .filter(|s| s.valid)
+                                .map(|s| cam_delta_to_robot(s.top_delta_x, s.top_delta_y, roi))
+                                .unwrap_or_else(|| cam_delta_to_robot(smooth.delta_cx, smooth.delta_cy, roi));
+                            let (top_robot_x, top_robot_y, top_robot_r) = si.as_ref()
+                                .filter(|s| s.valid)
+                                .map(|s| {
+                                    let (x, y, r, _) = robot_debug_for_point(
+                                        s.top_spine.center.x,
+                                        s.top_spine.center.y,
+                                        roi,
+                                    );
+                                    (x, y, r)
+                                })
+                                .unwrap_or((0.0, 0.0, 0.0));
+
+                            // Cập nhật D lot cho PLC
+                            {
+                                let regs = build_slave_regs(&smooth,&spine,flags,roi);
+                                let mut d = shared.slave_d.lock().unwrap();
+                                for i in 0..11 {
+                                    d[D_LOT_START as usize + i] = regs[i];
+                                }
+                            }
+                            shared.slave_m.lock().unwrap()[M_VISION_READY as usize] = true;
+                            shared.slave_m.lock().unwrap()[M_WORKPIECE_DETECT as usize] = true;
+
+                            // Cập nhật VisionFrame cho GUI
+                            let vf = VisionFrame {
+                                angle360:    smooth.out_angle360,
+                                delta_angle: smooth.out_delta_angle,
+                                delta_cx:    smooth.delta_cx,
+                                delta_cy:    smooth.delta_cy,
+                                center_x:    smooth.center.x,
+                                center_y:    smooth.center.y,
+                                tip_x:       smooth.tip.x,
+                                tip_y:       smooth.tip.y,
+                                heel_x:      smooth.heel.x,
+                                heel_y:      smooth.heel.y,
+                                length_px:   smooth.length_px,
+                                area:        spine.area,
+                                solidity:    spine.solidity,
+                                stacked:     spine.stacked,
+                                flipped:     spine.flipped,
+                                frozen:      false,
+                                damage:      spine.damage_flags,
+                                stack_state: si.as_ref().map(|s|s.stack_state).unwrap_or(0),
+                                data_ok:     true,
+                                flags,
+                                top_valid:   si.as_ref().map(|s|s.valid).unwrap_or(false),
+                                top_angle:   si.as_ref().map(|s|s.top_angle360).unwrap_or(0.0),
+                                top_delta_a: si.as_ref().map(|s|s.top_angle_delta).unwrap_or(0.0),
+                                top_flipped: si.as_ref().map(|s|s.top_flipped).unwrap_or(false),
+                                top_cx:      si.as_ref().map(|s|s.top_spine.center.x).unwrap_or(0.0),
+                                top_cy:      si.as_ref().map(|s|s.top_spine.center.y).unwrap_or(0.0),
+                                top_offset:  si.as_ref().map(|s|s.top_offset_px).unwrap_or(0.0),
+                                robot_x,
+                                robot_y,
+                                robot_r,
+                                robot_in,
+                                robot_dx,
+                                robot_dy,
+                                top_robot_x,
+                                top_robot_y,
+                                top_robot_r,
+                                frame_jpeg:  Vec::new(),   // JPEG được ghi bởi jpeg_encoder_thread
+                            };
+                            last_good = vf.clone();
+                            *shared.vision.lock().unwrap() = vf;
+                            jpeg_tx.try_send(display.clone()).ok();
+                        }
+                        None => {
+                            smooth.reset();
+                            top_smooth.reset();
+                            stack_warm.reset();
+                            stab.stacked_count = 0;
+                            stab.confirmed_stacked = false;
+                            {
+                                let mut d = shared.slave_d.lock().unwrap();
+                                for i in 0..D_LOT_COUNT as usize { d[D_LOT_START as usize + i] = 0; }
+                            }
+                            shared.slave_m.lock().unwrap()[M_VISION_READY as usize] = false;
+                            shared.slave_m.lock().unwrap()[M_WORKPIECE_DETECT as usize] = false;
+                            let mut vd = shared.vision.lock().unwrap();
+                            vd.data_ok = false;
+                            vd.frozen  = false;
+                            drop(vd);
+                            imgproc::put_text(&mut display,"Tính spine...",Point::new(12,36),
+                                imgproc::FONT_HERSHEY_SIMPLEX,0.6,Scalar::new(0.0,215.0,255.0,0.0),1,imgproc::LINE_AA,false)?;
+                            jpeg_tx.try_send(display.clone()).ok();
+                        }
+                    }
+                } else {
+                    // ── Debounce hết lót: chỉ xác nhận sau NO_INSOLE_CONFIRM_FRAMES frame liên tiếp ──
+                    // Tránh báo nhầm khi: robot vừa rút tay (frame đầu sau M111 còn tối),
+                    // ánh sáng chớp nhẹ 1 frame, lót đang được đặt vào chưa ổn định.
+                    stab.no_insole_count =
+                        (stab.no_insole_count + 1).min(NO_INSOLE_CONFIRM_FRAMES + 2);
+                    stab.confirmed_no_insole =
+                        stab.no_insole_count >= NO_INSOLE_CONFIRM_FRAMES;
+
+                    if stab.confirmed_no_insole {
+                        // Xác nhận hết lót thật: reset smooth, ghi D=0, M114=0
+                        smooth.reset();
+                        top_smooth.reset();
+                        stack_warm.reset();
+                        stab.stacked_count = 0;
+                        stab.confirmed_stacked = false;
+                        {
+                            let mut d = shared.slave_d.lock().unwrap();
+                            for i in 0..D_LOT_COUNT as usize { d[D_LOT_START as usize + i] = 0; }
+                        }
+                        shared.slave_m.lock().unwrap()[M_VISION_READY as usize] = false;
+                        shared.slave_m.lock().unwrap()[M_WORKPIECE_DETECT as usize] = false;
+                        let mut vd = shared.vision.lock().unwrap();
+                        vd.data_ok = false;
+                        vd.frozen  = false;
+                        drop(vd);
+                        imgproc::put_text(&mut display, "[HET LOT]", Point::new(12, 36),
+                            imgproc::FONT_HERSHEY_SIMPLEX, 0.9,
+                            Scalar::new(0.0, 0.0, 255.0, 0.0), 2, imgproc::LINE_AA, false)?;
+                    } else {
+                        // Chưa đủ frame xác nhận: giữ nguyên last_good, hiện cảnh báo nhẹ
+                        imgproc::put_text(&mut display, "Chờ lót...", Point::new(12, 36),
+                            imgproc::FONT_HERSHEY_SIMPLEX, 0.6,
+                            Scalar::new(0.0, 215.0, 255.0, 0.0), 1, imgproc::LINE_AA, false)?;
+                    }
+                    jpeg_tx.try_send(display.clone()).ok();
+                    show_frame(&display)?;
+                    continue;
+                }
+            }
+
+            AppState::NoReference => {
+                imgproc::put_text(&mut display,
+                    if roi_opt.is_some() {"Bam [S] chup mau"} else {"Bam [D] xac dinh vung lam viec"},
+                    Point::new(12,36),imgproc::FONT_HERSHEY_SIMPLEX,0.7,
+                    Scalar::new(0.0,215.0,255.0,0.0),2,imgproc::LINE_AA,false)?;
+                jpeg_tx.try_send(display.clone()).ok();
+            }
+        }
+
+        show_frame(&display)?;
+    }
+
+    running.store(false, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(300));
+    println!("Đã thoát.");
+    Ok(())
+}

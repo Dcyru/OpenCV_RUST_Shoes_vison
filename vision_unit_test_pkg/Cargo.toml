@@ -1,0 +1,15 @@
+[package]
+name    = "vision_unit_test"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "vision_unit_test"
+path = "src/main.rs"
+
+[dependencies]
+opencv = { version = "0.94", features = ["opencv-4"] }
+
+# Nếu dùng Windows + vcpkg:
+# [build-dependencies]
+# opencv = { version = "0.94", features = ["opencv-4", "buildtime-bindgen"] }

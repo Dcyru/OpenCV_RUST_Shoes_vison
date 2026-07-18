@@ -1,0 +1,21 @@
+[package]
+name        = "shoe_vision"
+version     = "0.12.0"
+edition     = "2021"
+
+[[bin]]
+name = "shoe_vision"
+path = "src/main.rs"
+
+[[bin]]
+name = "sim_server"
+path = "src/sim_server.rs"
+
+[dependencies]
+opencv = { version = "0.98.2", features = ["highgui","videoio","imgproc","video","clang-runtime"] }
+
+[profile.release]
+opt-level     = 3
+lto           = true
+codegen-units = 1
+strip         = true

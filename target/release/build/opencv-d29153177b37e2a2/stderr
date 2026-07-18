@@ -1,0 +1,274 @@
+=== Crate version: 0.98.2
+=== Environment configuration:
+===   OPENCV_PACKAGE_NAME = None
+===   OPENCV_PKGCONFIG_NAME = None
+===   OPENCV_CMAKE_NAME = None
+===   OPENCV_CMAKE_BIN = None
+===   OPENCV_VCPKG_NAME = None
+===   OPENCV_LINK_LIBS = Some("opencv_highgui4,opencv_ml4,opencv_objdetect4,opencv_photo4,opencv_stitching4,opencv_video4,opencv_videoio4,opencv_imgcodecs4,opencv_calib3d4,opencv_dnn4,opencv_features2d4,opencv_flann4,opencv_imgproc4,opencv_core4")
+===   OPENCV_LINK_PATHS = Some("C:\\vcpkg\\installed\\x64-windows\\lib")
+===   OPENCV_INCLUDE_PATHS = Some("C:\\vcpkg\\installed\\x64-windows\\include\\opencv4,C:\\vcpkg\\installed\\x64-windows\\include")
+===   OPENCV_DISABLE_PROBES = None
+===   OPENCV_MSVC_CRT = None
+===   OPENCV_CMAKE_TOOLCHAIN_FILE = None
+===   OPENCV_CMAKE_ARGS = None
+===   CMAKE_PREFIX_PATH = None
+===   OpenCV_DIR = None
+===   PKG_CONFIG_PATH = None
+===   VCPKG_ROOT = Some("C:\\vcpkg")
+===   VCPKGRS_DYNAMIC = None
+===   VCPKGRS_TRIPLET = None
+===   OCVRS_DOCS_GENERATE_DIR = None
+===   DOCS_RS = None
+===   PATH = Some("C:\\shoe_vision\\target\\release;C:\\shoe_vision\\target\\release\\deps;C:\\Users\\Lap2nd\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\lib;c:\\Users\\Lap2nd\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand;c:\\Users\\Lap2nd\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\Git\\cmd;C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Python312\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Launcher\\;C:\\Users\\Lap2nd\\.cargo\\bin;C:\\Users\\Lap2nd\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\Lap2nd\\.cargo\\bin;C:\\vcpkg\\installed\\x64-windows\\bin;C:\\opencv\\build\\x64\\vc16\\lib;C:\\Program Files\\CMake\\bin;C:\\Program Files\\LLVM\\bin;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\Git\\cmd;C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Python312\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Launcher\\;C:\\Users\\Lap2nd\\.cargo\\bin;C:\\Users\\Lap2nd\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\Lap2nd\\.cargo\\bin;C:\\vcpkg\\installed\\x64-windows\\bin;C:\\opencv\\build\\x64\\vc16\\lib;C:\\Program Files\\CMake\\bin;C:\\Program Files\\LLVM\\bin;C:\\opencv\\build\\x64\\vc16\\bin;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;c:\\Users\\Lap2nd\\.vscode\\extensions\\ms-python.debugpy-2026.6.0-win32-x64\\bundled\\scripts\\noConfigScripts;C:\\Users\\Lap2nd\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\bin")
+=== Enabled features:
+===   3D
+===   ALPHAMAT
+===   ARUCO
+===   ARUCO_DETECTOR
+===   BARCODE
+===   BGSEGM
+===   BIOINSPIRED
+===   CALIB
+===   CALIB3D
+===   CCALIB
+===   CLANG_RUNTIME
+===   CUDAARITHM
+===   CUDABGSEGM
+===   CUDACODEC
+===   CUDAFEATURES2D
+===   CUDAFILTERS
+===   CUDAIMGPROC
+===   CUDALEGACY
+===   CUDAOBJDETECT
+===   CUDAOPTFLOW
+===   CUDASTEREO
+===   CUDAWARPING
+===   CVV
+===   DEFAULT
+===   DNN
+===   DNN_SUPERRES
+===   DPM
+===   FACE
+===   FEATURES
+===   FEATURES2D
+===   FLANN
+===   FREETYPE
+===   FUZZY
+===   GAPI
+===   HDF
+===   HFS
+===   HIGHGUI
+===   IMGCODECS
+===   IMGPROC
+===   IMG_HASH
+===   INTENSITY_TRANSFORM
+===   LINE_DESCRIPTOR
+===   MCC
+===   ML
+===   OBJDETECT
+===   OPTFLOW
+===   OVIS
+===   PHASE_UNWRAPPING
+===   PHOTO
+===   PLOT
+===   QUALITY
+===   RAPID
+===   RGBD
+===   SALIENCY
+===   SFM
+===   SHAPE
+===   SIGNAL
+===   STEREO
+===   STITCHING
+===   STRUCTURED_LIGHT
+===   SUPERRES
+===   SURFACE_MATCHING
+===   TEXT
+===   TRACKING
+===   VIDEO
+===   VIDEOIO
+===   VIDEOSTAB
+===   VIZ
+===   WECHAT_QRCODE
+===   XFEATURES2D
+===   XIMGPROC
+===   XOBJDETECT
+===   XPHOTO
+===   XSTEREO
+=== Detected probe priority boost based on environment vars: pkg_config: false, cmake: false, vcpkg: true
+=== Probing the OpenCV library in the following order: environment, vcpkg_cmake, vcpkg, pkg_config, cmake
+=== Configuring OpenCV library from the environment:
+===   include_paths: C:\vcpkg\installed\x64-windows\include\opencv4,C:\vcpkg\installed\x64-windows\include
+===   link_paths: C:\vcpkg\installed\x64-windows\lib
+===   link_libs: opencv_highgui4,opencv_ml4,opencv_objdetect4,opencv_photo4,opencv_stitching4,opencv_video4,opencv_videoio4,opencv_imgcodecs4,opencv_calib3d4,opencv_dnn4,opencv_features2d4,opencv_flann4,opencv_imgproc4,opencv_core4
+=== Link search path: LinkSearch(Default, "C:\\vcpkg\\installed\\x64-windows\\lib")
+=== Linking to library: LinkLib(Default, "opencv_highgui4")
+=== Linking to library: LinkLib(Default, "opencv_ml4")
+=== Linking to library: LinkLib(Default, "opencv_objdetect4")
+=== Linking to library: LinkLib(Default, "opencv_photo4")
+=== Linking to library: LinkLib(Default, "opencv_stitching4")
+=== Linking to library: LinkLib(Default, "opencv_video4")
+=== Linking to library: LinkLib(Default, "opencv_videoio4")
+=== Linking to library: LinkLib(Default, "opencv_imgcodecs4")
+=== Linking to library: LinkLib(Default, "opencv_calib3d4")
+=== Linking to library: LinkLib(Default, "opencv_dnn4")
+=== Linking to library: LinkLib(Default, "opencv_features2d4")
+=== Linking to library: LinkLib(Default, "opencv_flann4")
+=== Linking to library: LinkLib(Default, "opencv_imgproc4")
+=== Linking to library: LinkLib(Default, "opencv_core4")
+=== Successfully probed using: environment
+=== OpenCV library configuration: Library {
+    include_paths: [
+        "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4",
+        "C:\\vcpkg\\installed\\x64-windows\\include",
+    ],
+    version: Version {
+        major: 4,
+        minor: 12,
+        patch: 0,
+    },
+    inherent_features: [
+        "directx",
+        "directx_nv12",
+        "d3d11",
+        "d3d10",
+        "d3d9",
+        "jpeg",
+        "png",
+        "tiff",
+        "quirc",
+    ],
+    cargo_metadata: [
+        "cargo::rustc-link-search=C:\\vcpkg\\installed\\x64-windows\\lib",
+        "cargo::rustc-link-lib=opencv_highgui4",
+        "cargo::rustc-link-lib=opencv_ml4",
+        "cargo::rustc-link-lib=opencv_objdetect4",
+        "cargo::rustc-link-lib=opencv_photo4",
+        "cargo::rustc-link-lib=opencv_stitching4",
+        "cargo::rustc-link-lib=opencv_video4",
+        "cargo::rustc-link-lib=opencv_videoio4",
+        "cargo::rustc-link-lib=opencv_imgcodecs4",
+        "cargo::rustc-link-lib=opencv_calib3d4",
+        "cargo::rustc-link-lib=opencv_dnn4",
+        "cargo::rustc-link-lib=opencv_features2d4",
+        "cargo::rustc-link-lib=opencv_flann4",
+        "cargo::rustc-link-lib=opencv_imgproc4",
+        "cargo::rustc-link-lib=opencv_core4",
+    ],
+}
+=== Found OpenCV version: 4.12.0 in headers located at: C:\vcpkg\installed\x64-windows\include\opencv4
+=== Detected OpenCV module header dir at: C:\vcpkg\installed\x64-windows\include\opencv4\opencv2
+=== Generating code in: C:\shoe_vision\target\release\build\opencv-d29153177b37e2a2\out
+=== Placing generated bindings into: C:\shoe_vision\target\release\build\opencv-d29153177b37e2a2\out\opencv
+=== Using OpenCV headers from: C:\vcpkg\installed\x64-windows\include\opencv4
+=== Clang: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+=== Clang command line args: [
+    "-isystemC:\\Program Files\\LLVM\\lib\\clang\\22\\include",
+    "-isystemC:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\include",
+    "-isystemC:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\atlmfc\\include",
+    "-isystemC:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\ucrt",
+    "-isystemC:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\shared",
+    "-isystemC:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\um",
+    "-isystemC:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\winrt",
+    "-isystemC:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\cppwinrt",
+    "-isystemC:\\vcpkg\\installed\\x64-windows\\include",
+    "-IC:\\vcpkg\\installed\\x64-windows\\include\\opencv4",
+    "-FC:\\vcpkg\\installed\\x64-windows\\include\\opencv4",
+    "-IC:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp",
+    "-FC:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp",
+    "-DOCVRS_PARSING_HEADERS",
+    "-includeocvrs_common.hpp",
+    "-std=c++17",
+]
+=== Using environment job server with the the amount of available jobs: 20
+=== Generating 14 modules
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "calib3d" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "dnn" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "features2d" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "flann" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "core" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "highgui" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "imgcodecs" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "imgproc" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "ml" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "objdetect" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "photo" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "video" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "videoio" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Running: "C:\\shoe_vision\\target\\release\\build\\opencv-db132954117e3f21\\build-script-build.exe" "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4" "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp" "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out" "stitching" "C:\\vcpkg\\installed\\x64-windows\\include"
+=== Generated module bindings: highgui in: 3.6448032s
+=== Generated module bindings: videoio in: 3.7355968s
+=== Generated module bindings: imgcodecs in: 3.7546476s
+=== Generated module bindings: photo in: 4.1555881s
+=== Generated module bindings: flann in: 4.363877s
+=== Generated module bindings: video in: 4.5408641s
+=== Generated module bindings: ml in: 4.6955437s
+=== Generated module bindings: features2d in: 4.9341713s
+=== Generated module bindings: objdetect in: 5.1673686s
+=== Generated module bindings: imgproc in: 5.20733s
+=== Generated module bindings: calib3d in: 5.2484145s
+=== Generated module bindings: stitching in: 5.7127454s
+=== Generated module bindings: core in: 6.2175957s
+=== Generated module bindings: dnn in: 8.4192402s
+=== Total binding generation time: 8.4198573s
+=== Total binding collection time: 450.7102ms
+=== Compiler information: Tool {
+    path: "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\cl.exe",
+    cc_wrapper_path: None,
+    cc_wrapper_args: [],
+    args: [
+        "-nologo",
+        "-MD",
+        "-O2",
+        "-Brepro",
+        "-std:c++17",
+        "-I",
+        "C:\\Users\\Lap2nd\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\opencv-0.98.2\\src_cpp",
+        "-I",
+        "C:\\shoe_vision\\target\\release\\build\\opencv-d29153177b37e2a2\\out",
+        "-I",
+        ".",
+        "-I",
+        "C:\\vcpkg\\installed\\x64-windows\\include\\opencv4",
+        "-I",
+        "C:\\vcpkg\\installed\\x64-windows\\include",
+        "-W4",
+        "-EHsc",
+        "-bigobj",
+        "-utf-8",
+        "-wd4996",
+        "-wd5054",
+        "-wd4190",
+        "-wd4702",
+        "-wd4100",
+        "-wd4127",
+        "-DOCVRS_FFI_EXPORT_SUFFIX=_0_98_2",
+        "-DOCVRS_TARGET_OS_WINDOWS=1",
+    ],
+    env: [
+        (
+            "LIB",
+            "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\lib\\x64;C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\atlmfc\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.26100.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.26100.0\\um\\x64;",
+        ),
+        (
+            "PATH",
+            "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64;C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64;C:\\shoe_vision\\target\\release;C:\\shoe_vision\\target\\release\\deps;C:\\Users\\Lap2nd\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\lib;c:\\Users\\Lap2nd\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand;c:\\Users\\Lap2nd\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\Git\\cmd;C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Python312\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Launcher\\;C:\\Users\\Lap2nd\\.cargo\\bin;C:\\Users\\Lap2nd\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\Lap2nd\\.cargo\\bin;C:\\vcpkg\\installed\\x64-windows\\bin;C:\\opencv\\build\\x64\\vc16\\lib;C:\\Program Files\\CMake\\bin;C:\\Program Files\\LLVM\\bin;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Program Files\\Git\\cmd;C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Python312\\;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Python\\Launcher\\;C:\\Users\\Lap2nd\\.cargo\\bin;C:\\Users\\Lap2nd\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\Lap2nd\\.cargo\\bin;C:\\vcpkg\\installed\\x64-windows\\bin;C:\\opencv\\build\\x64\\vc16\\lib;C:\\Program Files\\CMake\\bin;C:\\Program Files\\LLVM\\bin;C:\\opencv\\build\\x64\\vc16\\bin;C:\\Users\\Lap2nd\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;c:\\Users\\Lap2nd\\.vscode\\extensions\\ms-python.debugpy-2026.6.0-win32-x64\\bundled\\scripts\\noConfigScripts;C:\\Users\\Lap2nd\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\bin",
+        ),
+        (
+            "INCLUDE",
+            "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\include;C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\atlmfc\\include;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\ucrt;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\um;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\cppwinrt;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\winrt;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.26100.0\\shared;",
+        ),
+        (
+            "VSLANG",
+            "1033",
+        ),
+    ],
+    family: Msvc {
+        clang_cl: false,
+    },
+    cuda: false,
+    removed_args: [],
+    has_internal_target_arg: false,
+}
+=== Total cpp build time: 7.4569656s

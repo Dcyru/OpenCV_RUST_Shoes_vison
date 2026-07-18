@@ -1,0 +1,300 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<mxfile>
+  <diagram id="overview" name="Tong quan he thong">
+    <mxGraphModel dx="702" dy="305" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="ov_title" value="TONG QUAN LUONG CHAY - main.rs + gui.py" style="text;html=1;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;fontColor=#0f172a" parent="1" vertex="1">
+          <mxGeometry x="280" y="30" width="820" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_cam" value="Camera USB / CAM_ID&#10;Nguon anh thoi gian thuc" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=14" parent="1" vertex="1">
+          <mxGeometry x="60" y="150" width="190" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_main" value="Rust vision core&#10;src/main.rs&#10;Ham chinh: main()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=15;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="340" y="135" width="250" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_proc" value="Xu ly anh / tinh toa do&#10;segment_shoe()&#10;compute_shoe()&#10;analyze_stacked_v9()&#10;build_slave_regs()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#22c55e;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="340" y="310" width="250" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_plc" value="PLC / Robot&#10;Modbus TCP Master&#10;Doc D0..D10&#10;Ghi D100..D123 va M100..M112" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fee2e2;strokeColor=#dc2626;fontSize=14" parent="1" vertex="1">
+          <mxGeometry x="720" y="105" width="260" height="125" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_modbus" value="Modbus TCP Slave tren PC&#10;pc_slave_server()&#10;handle_plc_client()&#10;resp_fc03(), resp_fc16(), resp_fc01(), resp_fc05(), resp_fc15()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="690" y="300" width="320" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_ipc" value="IPC local cho GUI&#10;127.0.0.1:5556&#10;ipc_server_thread()&#10;jpeg_encoder_thread()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontSize=14" parent="1" vertex="1">
+          <mxGeometry x="350" y="560" width="250" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_gui_rx" value="Python receiver&#10;gui/gui.py&#10;IpcReceiver.run()&#10;Giai ma DATA:&lt;json&gt;+JPEG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=14" parent="1" vertex="1">
+          <mxGeometry x="720" y="545" width="260" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_gui" value="Dashboard Tkinter&#10;App.__init__() / _build()&#10;_poll() / _update()&#10;_draw_digital_twin()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;fontSize=14;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="1090" y="535" width="250" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="ov_cam" target="ov_main" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="ov_main" target="ov_proc" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_e3" value="D register / M coil" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="ov_proc" target="ov_modbus" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_e4" value="PLC doc/ghi" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="ov_modbus" target="ov_plc" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_e5" value="JSON + JPEG" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="ov_proc" target="ov_ipc" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="ov_ipc" target="ov_gui_rx" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ov_e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="ov_gui_rx" target="ov_gui" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="mainrs" name="Luu do main.rs">
+    <mxGraphModel dx="1404" dy="1810" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root><mxCell id="0" /><mxCell id="1" parent="0" /><mxCell id="m_title" value="LUU DO GIAI THUAT src/main.rs" style="text;html=1;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;fontColor=#0f172a" parent="1" vertex="1"><mxGeometry x="520" y="-260" width="600" height="40" as="geometry" /></mxCell><mxCell id="m_start" value="Bat dau chuong trinh&#10;main()" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=14;fontStyle=1" parent="1" vertex="1"><mxGeometry x="590" y="-190" width="200" height="70" as="geometry" /></mxCell><mxCell id="m_init" value="Khoi tao shared state, kernel morphology, camera, window&#10;AppShared::new(), get_structuring_element(), VideoCapture::new()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#22c55e;fontSize=13" parent="1" vertex="1"><mxGeometry x="540" y="-80" width="300" height="100" as="geometry" /></mxCell><mxCell id="m_threads" value="Tao 3 thread nen&#10;pc_slave_server() - Modbus PLC&#10;ipc_server_thread() - GUI IPC&#10;jpeg_encoder_thread() - nen JPEG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontSize=13" parent="1" vertex="1"><mxGeometry x="540" y="50" width="300" height="115" as="geometry" /></mxCell><mxCell id="m_load" value="Nap ROI va mau neu co&#10;load_roi(), load_reference(), load_ref_mask()&#10;compute_ref_spine()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontSize=13" parent="1" vertex="1"><mxGeometry x="540" y="200" width="300" height="105" as="geometry" /></mxCell><mxCell id="m_loop" value="Lap tung frame camera&#10;cam.read(), wait_key()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#4f46e5;fontSize=14;fontStyle=1" parent="1" vertex="1"><mxGeometry x="570" y="340" width="240" height="80" as="geometry" /></mxCell><mxCell id="m_key" value="Co phim dieu khien?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;fontSize=13" parent="1" vertex="1"><mxGeometry x="580" y="460" width="220" height="100" as="geometry" /></mxCell><mxCell id="m_keys" value="Xu ly phim&#10;Q: thoat&#10;D: full_frame_roi(), save_roi()&#10;S: AppState::Capturing&#10;R: load_reference()+compute_ref_spine()&#10;P: bat/tat tcp_enabled" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#f97316;fontSize=12" parent="1" vertex="1"><mxGeometry x="980" y="460" width="300" height="150" as="geometry" /></mxCell><mxCell id="m_state" value="Trang thai AppState?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=13" parent="1" vertex="1"><mxGeometry x="560" y="640" width="260" height="110" as="geometry" /></mxCell><mxCell id="m_noref" value="NoReference&#10;Hien thong bao: bam D/S&#10;Gui frame sang encoder&#10;jpeg_tx.try_send()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13" parent="1" vertex="1"><mxGeometry x="140" y="800" width="280" height="115" as="geometry" /></mxCell><mxCell id="m_cap" value="Capturing&#10;Cat ROI, cong don CAPTURE_FRAMES&#10;Luu reference.png&#10;compute_ref_spine(), luu ref_mask.png&#10;Chuyen Tracking neu hop le" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=13" parent="1" vertex="1"><mxGeometry x="1020" y="800" width="280" height="150" as="geometry" /></mxCell><mxCell id="m_track" value="Tracking: cat ROI va tao mask&#10;Mat::roi()&#10;segment_shoe()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=13;fontStyle=1" parent="1" vertex="1"><mxGeometry x="560" y="800" width="280" height="100" as="geometry" /></mxCell><mxCell id="m_contour" value="Loc ung vien lot giay&#10;count_non_zero(), find_contours()&#10;Kiem tra area va ratio theo ref_spine.area" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#22c55e;fontSize=13" parent="1" vertex="1"><mxGeometry x="560" y="950" width="280" height="110" as="geometry" /></mxCell><mxCell id="m_foreign" value="Vat la / freeze?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fee2e2;strokeColor=#dc2626;fontSize=13" parent="1" vertex="1"><mxGeometry x="580" y="1110" width="240" height="105" as="geometry" /></mxCell><mxCell id="m_freeze" value="Freeze ket qua&#10;Set D0..D10 = 0&#10;M_VISION_READY = false&#10;shared.vision = last_good, frozen=true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fecaca;strokeColor=#b91c1c;fontSize=13" parent="1" vertex="1"><mxGeometry x="980" y="1110" width="280" height="125" as="geometry" /></mxCell><mxCell id="m_shoec" value="Tim thay contour lot?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;fontSize=13" parent="1" vertex="1"><mxGeometry x="580" y="1270" width="240" height="100" as="geometry" /></mxCell><mxCell id="m_noshoe" value="Khong co lot trong ROI&#10;smooth.reset()&#10;M_VISION_READY=false&#10;jpeg_tx.try_send()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#6b7280;fontSize=13" parent="1" vertex="1"><mxGeometry x="140" y="1270" width="280" height="115" as="geometry" /></mxCell><mxCell id="m_compute" value="Tinh spine / geometry lot&#10;compute_shoe()&#10;spine_from_mask() hoac spine_from_mask_width_vote()&#10;delta_angle_signed(), damage flags" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=13" parent="1" vertex="1"><mxGeometry x="550" y="1420" width="300" height="140" as="geometry" /></mxCell><mxCell id="m_suspect" value="Nghi lot chong?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontSize=13" parent="1" vertex="1"><mxGeometry x="570" y="1610" width="260" height="105" as="geometry" /></mxCell><mxCell id="m_stack" value="Phan tich lot tren&#10;analyze_stacked_v9()&#10;centroid(), pca_angle_raw(), warp_mask()&#10;tim dx/dy/goc tot nhat, fit_iou&#10;cam_flush() neu xu ly cham" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;fontSize=12" parent="1" vertex="1"><mxGeometry x="1340" y="1610" width="300" height="160" as="geometry" /></mxCell><mxCell id="m_update" value="Lam muot + ve overlay&#10;SpineSmooth::update()&#10;draw_vision_only()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontSize=13" parent="1" vertex="1"><mxGeometry x="560" y="1770" width="280" height="100" as="geometry" /></mxCell><mxCell id="m_robot" value="Doi toa do camera sang robot&#10;robot_debug_for_point()&#10;cam_delta_to_robot()&#10;cam_to_robot()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=13" parent="1" vertex="1"><mxGeometry x="550" y="1910" width="300" height="110" as="geometry" /></mxCell><mxCell id="m_regs" value="Cap nhat PLC registers&#10;build_slave_regs()&#10;Ghi D0..D10&#10;M_VISION_READY=true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;fontSize=13" parent="1" vertex="1"><mxGeometry x="560" y="2060" width="280" height="110" as="geometry" /></mxCell><mxCell id="m_vf" value="Cap nhat frame cho GUI&#10;VisionFrame { ang, dx/dy, stack, robot, flags }&#10;shared.vision = vf&#10;jpeg_tx.try_send(display)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=13" parent="1" vertex="1"><mxGeometry x="550" y="2210" width="300" height="130" as="geometry" /></mxCell><mxCell id="m_endloop" value="Hien thi va lap tiep&#10;highgui::imshow()&#10;Neu thoat: running=false" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e5e7eb;strokeColor=#374151;fontSize=13" parent="1" vertex="1"><mxGeometry x="470" y="2390" width="440" height="90" as="geometry" /></mxCell><mxCell id="m_e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_start" target="m_init" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_init" target="m_threads" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_threads" target="m_load" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_load" target="m_loop" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_loop" target="m_key" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e6" value="Co" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" parent="1" source="m_key" target="m_keys" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e7" value="Tiep tuc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0;exitY=0.8;exitDx=0;exitDy=0;entryX=1;entryY=0.3;entryDx=0;entryDy=0;" parent="1" source="m_keys" target="m_state" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e8" value="Khong" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="m_key" target="m_state" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e9" value="NoReference" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0.15;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="m_state" target="m_noref" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e10" value="Capturing" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0.85;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;" parent="1" source="m_state" target="m_cap" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e11" value="Tracking" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="m_state" target="m_track" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_track" target="m_contour" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_contour" target="m_foreign" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e14" value="Co" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.4;exitDx=0;exitDy=0;entryX=0;entryY=0.4;entryDx=0;entryDy=0;" parent="1" source="m_foreign" target="m_freeze" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e15" value="Khong" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="m_foreign" target="m_shoec" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e16" value="Khong" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0;exitY=0.6;exitDx=0;exitDy=0;entryX=1;entryY=0.4;entryDx=0;entryDy=0;" parent="1" source="m_shoec" target="m_noshoe" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e17" value="Co" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.4;entryY=0;entryDx=0;entryDy=0;" parent="1" source="m_shoec" target="m_compute" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_compute" target="m_suspect" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e19" value="Co" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.4;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" parent="1" source="m_suspect" target="m_stack" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e20" value="Ket qua stack -&gt; smooth" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.3;entryDx=0;entryDy=0;" parent="1" source="m_stack" target="m_update" edge="1"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1490" y="1810" /><mxPoint x="880" y="1800" /></Array></mxGeometry></mxCell><mxCell id="m_e21" value="Khong" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="m_suspect" target="m_update" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_update" target="m_robot" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e23" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_robot" target="m_regs" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e24" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_regs" target="m_vf" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e25" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;" parent="1" source="m_vf" target="m_endloop" edge="1"><mxGeometry relative="1" as="geometry" /></mxCell><mxCell id="m_e26" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.9;exitDx=0;exitDy=0;entryX=0.85;entryY=1;entryDx=0;entryDy=0;" parent="1" source="m_freeze" target="m_endloop" edge="1"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1320" y="1220" /><mxPoint x="1320" y="2500" /></Array></mxGeometry></mxCell><mxCell id="m_e27" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0;exitY=0.9;exitDx=0;exitDy=0;entryX=0.15;entryY=1;entryDx=0;entryDy=0;" parent="1" source="m_noshoe" target="m_endloop" edge="1"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="80" y="1380" /><mxPoint x="80" y="2500" /></Array></mxGeometry></mxCell><mxCell id="m_e28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0;exitY=0.9;exitDx=0;exitDy=0;entryX=0.0;entryY=1;entryDx=0;entryDy=0;" parent="1" source="m_noref" target="m_endloop" edge="1"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="-10" y="910" /><mxPoint x="-10" y="2508" /></Array></mxGeometry></mxCell><mxCell id="m_e29" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.9;exitDx=0;exitDy=0;entryX=1.0;entryY=1;entryDx=0;entryDy=0;" parent="1" source="m_cap" target="m_endloop" edge="1"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1410" y="950" /><mxPoint x="1410" y="2508" /></Array></mxGeometry></mxCell><mxCell id="m_e30" value="Lap tiep (frame ke tiep)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="m_endloop" target="m_loop" edge="1"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="-220" y="2435" /><mxPoint x="-220" y="380" /></Array></mxGeometry></mxCell></root></mxGraphModel>
+  </diagram>
+  <diagram id="servers" name="Modbus va IPC main.rs">
+    <mxGraphModel dx="702" dy="305" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="s_title" value="LUONG SERVER NEN TRONG src/main.rs" style="text;html=1;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;fontColor=#0f172a" parent="1" vertex="1">
+          <mxGeometry x="430" y="30" width="600" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="s_mod_start" value="Modbus thread&#10;pc_slave_server()" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="80" y="110" width="180" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s_bind" value="Bind port&#10;Thu 0.0.0.0:502&#10;Loi thi fallback 0.0.0.0:5020" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#f97316" parent="1" vertex="1">
+          <mxGeometry x="340" y="100" width="240" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="s_accept" value="Lap accept PLC client&#10;listener.accept()&#10;spawn handle_plc_client()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#f97316" parent="1" vertex="1">
+          <mxGeometry x="660" y="105" width="250" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="s_handle" value="Xu ly request Modbus&#10;handle_plc_client()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fee2e2;strokeColor=#dc2626;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="1000" y="105" width="230" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="s_fc" value="Nhan function code&#10;FC03 doc D register - resp_fc03()&#10;FC16 ghi D robot - resp_fc16(), d_words_to_i64()&#10;FC01 doc M coil - resp_fc01()&#10;FC05/FC15 ghi M coil - resp_fc05()/resp_fc15()&#10;Khac: resp_exception()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fecaca;strokeColor=#b91c1c;fontSize=12" parent="1" vertex="1">
+          <mxGeometry x="930" y="250" width="370" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="s_ipc_start" value="IPC thread&#10;ipc_server_thread()" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="80" y="540" width="180" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s_ipc_bind" value="Bind 127.0.0.1:5556&#10;Nhan ket noi GUI&#10;Luu danh sach clients" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fefce8;strokeColor=#ca8a04" parent="1" vertex="1">
+          <mxGeometry x="340" y="525" width="250" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="s_json" value="Lay snapshot shared data&#10;shared.vision, slave_d, slave_m, tcp_clients&#10;Dong goi JSON: ang, dx/dy, flags, pm, pd, robot..." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fefce8;strokeColor=#ca8a04" parent="1" vertex="1">
+          <mxGeometry x="680" y="515" width="320" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="s_packet" value="Gui packet GUI&#10;DATA:&lt;json_len&gt;:&lt;jpeg_len&gt;\\n + JSON + JPEG&#10;Loai client loi, giam ipc_clients" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706" parent="1" vertex="1">
+          <mxGeometry x="1090" y="525" width="260" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="s_jpeg" value="JPEG encoder thread&#10;jpeg_encoder_thread()&#10;Lay frame moi nhat tu channel&#10;encode_jpeg()&#10;Ghi shared.vision.frame_jpeg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7" parent="1" vertex="1">
+          <mxGeometry x="660" y="700" width="300" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="s_mod_start" target="s_bind" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="s_bind" target="s_accept" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="s_accept" target="s_handle" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="s_handle" target="s_fc" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="s_ipc_start" target="s_ipc_bind" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="s_ipc_bind" target="s_json" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="s_json" target="s_packet" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e8" value="JPEG tu shared.vision" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="s_jpeg" target="s_json" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="guipy" name="Luu do gui.py">
+    <mxGraphModel dx="1755" dy="763" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="g_title" value="LUU DO GIAO DIEN gui/gui.py" style="text;html=1;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;fontColor=#0f172a" parent="1" vertex="1">
+          <mxGeometry x="480" y="25" width="560" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="g_start" value="Chay GUI&#10;if __name__ == '__main__'&#10;App(); mainloop()" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=14;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="70" y="105" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="g_init" value="Khoi tao app Tkinter&#10;App.__init__()&#10;tao queue, IpcReceiver, counters, ROI state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="390" y="95" width="300" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="g_build" value="Dung giao dien&#10;_fonts(), _build()&#10;_build_mid(), _build_left(), _build_right(), _card()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="790" y="90" width="320" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="g_start_rx" value="Bat dau nhan du lieu&#10;self.recv.start()&#10;after(33, _poll)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="1210" y="105" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="g_rx" value="Thread nhan IPC&#10;IpcReceiver.run()&#10;connect 127.0.0.1:5556&#10;Tu dong reconnect RECONNECT_S" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=13;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="80" y="315" width="260" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="g_packet" value="Doc socket va tach packet&#10;Header DATA:json_len:jpeg_len&#10;json.loads()&#10;Gan _jpeg neu co&#10;q.put(data)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="420" y="300" width="280" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="g_poll" value="Vong cap nhat UI&#10;App._poll() moi 33ms&#10;doc queue khong chan" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontSize=13;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="800" y="325" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="g_status" value="Item la _status?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="1150" y="320" width="180" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="g_conn" value="Cap nhat trang thai ket noi&#10;lbl_conn&#10;_log()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="1220" y="500" width="220" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="g_update" value="Cap nhat du lieu frame&#10;last_d = item&#10;frame_ct++&#10;_update(last_d)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=13;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="790" y="510" width="270" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="g_angle" value="Hien thi vision result&#10;_update()&#10;chon lot tren neu stacked + top_valid&#10;cap nhat goc, dx/dy, spine, stack, flags, warning" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="710" width="330" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="g_img" value="Hien thi anh camera&#10;Image.open(BytesIO(_jpeg))&#10;ImageTk.PhotoImage()&#10;cam_canvas.create_image()&#10;_draw_roi_overlay()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="480" y="710" width="300" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="g_plc" value="Hien thi PLC / M coil&#10;_flatten_m_coils()&#10;LED M100..M112, M2000&#10;Dem chu trinh M109 canh len" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="850" y="710" width="300" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="g_robot" value="Robot dashboard&#10;_robot_d64_from_pd()&#10;D100/D104/D108 pulses&#10;theta = pulse / PULSE_PER_DEG&#10;dkm(theta) -&gt; TCP xyz" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="1210" y="700" width="270" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="g_draw" value="Ve robot va quy dao&#10;_draw_digital_twin()&#10;TrajectoryView.push()/redraw()&#10;Sparkline.push()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="580" y="930" width="320" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="g_roi" value="Tuong tac ROI tren GUI&#10;_roi_press(), _roi_motion(), _roi_release()&#10;_roi_clear(), get_roi_pixels()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#22c55e;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="980" y="930" width="320" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="g_close" value="Dong ung dung&#10;_close()&#10;IpcReceiver.stop(), destroy()" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e5e7eb;strokeColor=#374151;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="150" y="945" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_start" target="g_init" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_init" target="g_build" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_build" target="g_start_rx" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_start_rx" target="g_rx" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_rx" target="g_packet" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_packet" target="g_poll" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_poll" target="g_status" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e8" value="Co" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_status" target="g_conn" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e9" value="Khong" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_status" target="g_update" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_update" target="g_angle" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_update" target="g_img" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_update" target="g_plc" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_update" target="g_robot" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_angle" target="g_draw" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="g_e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;endFill=1" parent="1" source="g_robot" target="g_draw" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="mapping" name="Bang anh xa chuc nang">
+    <mxGraphModel dx="702" dy="305" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="map_title" value="BANG ANH XA CHUC NANG - TEN HAM THUC THI" style="text;html=1;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;fontColor=#0f172a" parent="1" vertex="1">
+          <mxGeometry x="360" y="30" width="760" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="map_main" value="main.rs - Nhom vision / PLC / IPC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=16;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="70" y="100" width="560" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="map_m1" value="Khoi dong chuong trinh: main(), AppShared::new()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#22c55e;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="170" width="560" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="map_m2" value="ROI / mau chuan: full_frame_roi(), save_roi(), load_roi(), load_reference(), load_ref_mask(), compute_ref_spine()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#22c55e;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="230" width="560" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="map_m3" value="Phan doan lot: segment_shoe(); PCA spine: pca_spine_core(), spine_from_mask(), spine_from_mask_width_vote()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#22c55e;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="305" width="560" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="map_m4" value="Tinh ket qua lot: compute_shoe(), delta_angle_signed(), angle360_from_center_tip(), SpineSmooth::update()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#22c55e;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="380" width="560" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="map_m5" value="Phan tich lot chong: analyze_stacked_v9(), centroid(), pca_angle_raw(), warp_mask(), cam_flush()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="450" width="560" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="map_m6" value="Toa do robot / PLC data: cam_to_robot(), cam_delta_to_robot(), robot_debug_for_point(), build_slave_regs()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="520" width="560" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="map_m7" value="Modbus TCP slave: pc_slave_server(), handle_plc_client(), resp_fc03(), resp_fc01(), resp_fc16(), resp_fc05(), resp_fc15(), resp_exception(), d_words_to_i64(), m_name()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="590" width="560" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="map_m8" value="GUI IPC / JPEG: ipc_server_thread(), jpeg_encoder_thread(), encode_jpeg()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="70" y="680" width="560" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="map_gui" value="gui.py - Nhom dashboard / robot" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=16;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="760" y="100" width="560" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="map_g1" value="Khoi dong GUI: App.__init__(), _is_windows(), _fonts(), _build(), _build_left(), _build_mid(), _build_right(), _card()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="760" y="170" width="560" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="map_g2" value="Nhan IPC: IpcReceiver.__init__(), IpcReceiver.run(), IpcReceiver.stop()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="760" y="250" width="560" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="map_g3" value="Vong cap nhat UI: App._poll(), App._update()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="760" y="315" width="560" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="map_g4" value="Hien thi trend va camera: Sparkline.push(), Image.open(), _draw_roi_overlay()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#9333ea;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="760" y="380" width="560" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="map_g5" value="PLC / M coil / D register: _flatten_m_coils(), _robot_d64_from_pd(), _update_plc_d_text()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="760" y="445" width="560" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="map_g6" value="Robot kinematics: dkm(), ikm(), _draw_digital_twin(), TrajectoryView.push(), TrajectoryView.redraw(), TrajectoryView.clear()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="760" y="515" width="560" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="map_g7" value="ROI thao tac chuot: _canvas_to_img(), _roi_press(), _roi_motion(), _roi_release(), _roi_clear(), get_roi_pixels()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="760" y="595" width="560" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="map_g8" value="Log va dong app: _log(), _close()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e5e7eb;strokeColor=#374151;fontSize=13" parent="1" vertex="1">
+          <mxGeometry x="760" y="670" width="560" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
